@@ -10,6 +10,7 @@ interface Card {
   id: number | string,
   playerIndex: number,
   label: string | number
+  type: number | string,
 }
 const Actions = {
   freeze: 'freeze',
@@ -26,6 +27,7 @@ const Modifiers = {
   "+10": "+10",
   x2: "x2",  
 } as const
+
 type Modifiers = typeof Modifiers[keyof typeof Modifiers]
 
 interface DeckProps {
@@ -98,7 +100,6 @@ const initializeDeck = ():DeckProps[] => {
     ...threeZeroes
   ]
 
-  
   return merged
 }
 
@@ -117,6 +118,7 @@ export default function Home() {
   const [deck, setDeck] = useState<DeckProps[]>([])
   const [cards, setCards] = useState<Card[]>([])
   const [currentPlayer, setCurrentPlayer] = useState(0)
+  const [idlePlayers, setIdlePlayers] = useState<number[]>([])
   const [actions, setActions] = useState<PlayerAction[]>(Array(PLAYER_COUNT).fill('idle'))
 
   const servingRef = useRef(false)
@@ -129,29 +131,46 @@ export default function Home() {
     setDeck(getShuffled)    
   }, []) 
 
-  
- 
 
   const dealCard = (playerIndex: number) => {
+     
     setDeck(prevDeck => {
       if (!prevDeck.length) return prevDeck
-      
 
-      const [topCard, ...rest] = prevDeck
+      const [topCard, ...rest] = prevDeck 
+      console.log("topCard", topCard)
       queueMicrotask(() => {
         setCards(prevCards => [
             ...prevCards,
-            { id: topCard.id, label: topCard.label, playerIndex }    
+            { id: topCard.id, label: topCard.label, playerIndex, type: topCard.cardType }    
         ])
       })
       
       return rest
-    })    
+    })  
+     
   }
 
   const nextTurn = () => {
-    setCurrentPlayer((prev) => (prev + 1)  % PLAYER_COUNT)
+    
+    setCurrentPlayer((prev) => {
+      const valid = Array.from({ length: PLAYER_COUNT}, (_,i) =>  i).filter(n => !idlePlayers.includes(n))
+      
+      let next = prev
+
+      do {
+        next = (next + 1)  % PLAYER_COUNT        
+      } while (!valid.includes(next))
+      return next
+    })
   }
+
+  const evaluatePlayerCards = (pCards: Card[], currP: number) => {
+    const playerCards = pCards.filter(pCard => pCard.playerIndex === currP)
+    
+    return playerCards
+  }
+    
 
   const handleAction = (action: PlayerAction) => { 
     if (servingRef.current) return
@@ -165,9 +184,13 @@ export default function Home() {
 
      
 
-    if (action === 'take') {
-      dealCard(currentPlayer)
+    const pCards = evaluatePlayerCards(cards, currentPlayer)
+    if (action === 'take' && pCards.length < 7) {
+      console.log('current p cards', pCards)
+      dealCard(currentPlayer)      
     }
+
+    
 
     setTimeout(() => {
       nextTurn()
@@ -184,6 +207,46 @@ export default function Home() {
     }
   }
 
+  const checkDuplicateCards = (crds:Card[]) => {
+    const seen = new Set<number | string>()
+    
+
+    for (const card of crds) {
+      if (seen.has(card.label)) return true
+      seen.add(card.label)
+    }
+    return false
+  }
+
+  useEffect(() => {
+    console.log('cards ', cards) 
+    if (!cards.length) return
+    if (cards[cards.length - 1].playerIndex === currentPlayer && Number(cards[cards.length-1].label) > 5 ) {
+      console.log('greater than 5 the latest label')
+    }
+
+    const playerCards = cards.filter(crd => crd.playerIndex === currentPlayer)
+      // verifies a number
+      .filter(c => Number(c.type) >= 0)
+    console.log("playerCards ", playerCards)
+
+    const hasDuplicate = checkDuplicateCards(playerCards)
+    console.log('hasDuplicate ', hasDuplicate)
+    if (hasDuplicate) {
+      console.log(currentPlayer)
+      setIdlePlayers(prev => {
+        if (prev.includes(currentPlayer)) return prev
+        return [...prev, currentPlayer]
+      })
+    }
+
+    
+  }, [cards])
+  
+  useEffect(() => {
+    
+    console.log('idlePlayers ', idlePlayers)
+  }, [idlePlayers])
   return (
     <>
       <main>
@@ -219,8 +282,8 @@ export default function Home() {
               { cards.map((card, i) => {
                 let ind = i
                 const pos = getPlayerPos(card.playerIndex)
-                console.log('pos ', pos)
-                console.log('i ', i) 
+                // console.log('pos ', pos)
+                // console.log('i ', i) 
                 return (
                   <motion.div
                     key={card.id}
