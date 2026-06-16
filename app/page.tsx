@@ -1,6 +1,6 @@
 'use client'
-import { useEffect, useRef, useState } from "react"; 
-import { motion, AnimatePresence } from "motion/react";
+import { useEffect, useMemo, useRef, useState } from "react"; 
+import { motion, AnimatePresence, number } from "motion/react";
 import { nanoid } from 'nanoid' 
  
 
@@ -104,6 +104,7 @@ const initializeDeck = ():DeckProps[] => {
 }
 
 const PLAYER_COUNT = 4
+const PLAYER_COUNT2 = 6
 
 const shuffle = (orig:DeckProps[]) => {
   const mergedItems = [...orig]  
@@ -120,6 +121,41 @@ export default function Home() {
   const [currentPlayer, setCurrentPlayer] = useState(0)
   const [idlePlayers, setIdlePlayers] = useState<number[]>([])
   const [actions, setActions] = useState<PlayerAction[]>(Array(PLAYER_COUNT).fill('idle'))
+
+  const chunk = (arr: any, size: number) => {
+    const result = []
+    for (let i = 0; i < arr.length; i += size) {
+      result.push(arr.slice(i, i + size))
+    }
+    return result
+  }
+
+  const buildRows = (players: number[]) => {
+    const n = players.length
+    if (n <= 4) return chunk(players, 2)
+    if (n === 5) return [players.slice(0,3), players.slice(3)]
+    return chunk(players, 3)
+
+  }
+
+  const buildPositionmap = (rows: number[][]) => {
+    const map = new Map<number, { row: number; col: number}>()
+    rows.forEach((row, rowIndex) => {
+      row.forEach((playerIndex, colIndex) => {
+        map.set(playerIndex, { row: rowIndex, col: colIndex })
+      })
+    })
+    return map
+  }
+
+  const players = useMemo(
+  () => Array.from({ length: PLAYER_COUNT2 }, (_, i) => i),
+    []
+  )
+
+  const rows = useMemo(() => buildRows(players), [players])
+
+  const positionMap = useMemo(() => buildPositionmap(rows), [rows])
 
   const servingRef = useRef(false)
 
@@ -206,7 +242,8 @@ export default function Home() {
       y: Math.sin(angle) * radius
     }
   }
-
+ 
+ 
   const checkDuplicateCards = (crds:Card[]) => {
     const seen = new Set<number | string>()
     
@@ -218,8 +255,7 @@ export default function Home() {
     return false
   }
 
-  useEffect(() => {
-    console.log('cards ', cards) 
+  useEffect(() => { 
     if (!cards.length) return
     if (cards[cards.length - 1].playerIndex === currentPlayer && Number(cards[cards.length-1].label) > 5 ) {
       console.log('greater than 5 the latest label')
@@ -227,73 +263,101 @@ export default function Home() {
 
     const playerCards = cards.filter(crd => crd.playerIndex === currentPlayer)
       // verifies a number
-      .filter(c => Number(c.type) >= 0)
-    console.log("playerCards ", playerCards)
+      .filter(c => Number(c.type) >= 0) 
 
-    const hasDuplicate = checkDuplicateCards(playerCards)
-    console.log('hasDuplicate ', hasDuplicate)
+    const hasDuplicate = checkDuplicateCards(playerCards) 
     if (hasDuplicate) {
       console.log(currentPlayer)
       setIdlePlayers(prev => {
         if (prev.includes(currentPlayer)) return prev
         return [...prev, currentPlayer]
       })
-    }
-
-    
+    }    
   }, [cards])
-  
-  useEffect(() => {
-    
-    console.log('idlePlayers ', idlePlayers)
-  }, [idlePlayers])
+   
+ 
+   
   return (
     <>
       <main>
-        <div className="relative w-screen h-screen bg-slate-900 overflow-hidden">
+        <div className="relative w-screen h-screen bg-fuchsia-100 overflow-hidden">
           {/* Deck */}
           <div className="absolute left-1/2 top-1/2 w-2- h-28 bg-red-500 rounded-md -translate-x-1/2 -translate-y-1/2 flex items-center justify-center text-white">
            Deck ({deck.length})
-          </div>
+          </div> 
 
+      
           {Array.from({ length: PLAYER_COUNT }).map((_, i) => {
-            const pos = getPlayerPos(i)
+            const pos = positionMap.get(i)
+            if (!pos) return null
+
+            const { row, col } = pos
+
+            const rowCount = rows.length
+            const colCount = rows[row].length
+
+            const xSpacing = 400
+            const ySpacing = 300
+
+            const x =
+              (col - (colCount - 1) / 2) * xSpacing
+
+            const y =
+              (row - (rowCount - 1) / 2) * ySpacing - 80
+
             return (
               <div
-                key ={i}
-                className="absolute text-white font-bold transition-all"
+                key={i}
+                className="absolute font-bold transition-all border-2 border-red-700 px-2 py-1 rounded"
                 style={{
-                  left: '50%',
-                  top: '50%',
-                  transform: `translate(${pos.x}px, ${pos.y}px)`,
-                  color: currentPlayer === i ? 'yellow' : 'white'
+                  left: "50%",
+                  top: "50%",
+                  transform: `translate(${x}px, ${y}px)`,
+                  color: currentPlayer === i ? "yellow" : "white",
                 }}
               >
-                <span className="text-black text-3xl font-bold">Player {i + 1}</span>
-                <div className="text-xs opacity-70">
+                <div className="text-black text-2xl">
+                  Player {i + 1}
+                </div>
+
+                <div className="text-xs opacity-70 tex">
                   {actions[i]}
                 </div>
               </div>
             )
           })}
-
           {/* Cards */}
           <AnimatePresence>
               { cards.map((card, i) => {
                 let ind = i
-                const pos = getPlayerPos(card.playerIndex)
-                // console.log('pos ', pos)
-                // console.log('i ', i) 
+                // const pos = getPlayerPos(card.playerIndex)
+                
+                const pos = positionMap.get(card.playerIndex)
+                if (!pos) return null
+
+                const { row, col } = pos
+
+                const rowCount = rows.length
+                const colCount = rows[row].length
+
+                const xSpacing = 400
+                const ySpacing = 300
+                
+                const x = 
+                  (col - (colCount - 1) / 2) * xSpacing
+                const y = 
+                  (row - (rowCount - 1) / 2) * ySpacing
+                
                 return (
                   <motion.div
                     key={card.id}
                     initial={{
                       x: 0, y: 0,
-                      scale: 0.8, rotate: 0
+                      scale: 0.5, rotate: 0
                     }}
                     animate={{
-                      x: pos.x + ((ind+1) * 20),
-                      y: pos.y,
+                      x: x + i * 24,
+                      y: y,
                       scale: 1, 
                     }}
                     transition={{
