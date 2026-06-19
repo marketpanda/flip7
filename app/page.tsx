@@ -103,7 +103,7 @@ const initializeDeck = ():DeckProps[] => {
   return merged
 }
 
-const PLAYER_COUNT = 4
+const PLAYER_COUNT = 3
 const PLAYER_COUNT2 = 6
 
 const shuffle = (orig:DeckProps[]) => {
@@ -233,15 +233,7 @@ export default function Home() {
       servingRef.current = false
     }, 300)
   }
-  const getPlayerPos = (index: number) => {
-    const radius = 260
-    const angle = (Math.PI * 2 * index) / PLAYER_COUNT - Math.PI / 2
-    // console.log('angle ', angle)
-    return {
-      x: Math.cos(angle) * radius,
-      y: Math.sin(angle) * radius
-    }
-  }
+ 
  
  
   const checkDuplicateCards = (crds:Card[]) => {
@@ -280,11 +272,11 @@ export default function Home() {
   return (
     <>
       <main>
-        <div className="relative w-screen h-screen bg-fuchsia-100 overflow-hidden">
+        <div className="relative w-screen h-screen bg-fuchsia-100 overflow-hidden border-amber-300 border-2">
           {/* Deck */}
-          <div className="absolute left-1/2 top-1/2 w-2- h-28 bg-red-500 rounded-md -translate-x-1/2 -translate-y-1/2 flex items-center justify-center text-white">
+          <div className="absolute left-1/2 bottom-0 w-2- h-28 bg-red-500 rounded-md -translate-x-1/2 -translate-y-1/2 flex items-center justify-center text-white">
            Deck ({deck.length})
-          </div> 
+          </div>  
 
       
           {Array.from({ length: PLAYER_COUNT }).map((_, i) => {
@@ -297,7 +289,7 @@ export default function Home() {
             const colCount = rows[row].length
 
             const xSpacing = 400
-            const ySpacing = 300
+            const ySpacing = 400
 
             const x =
               (col - (colCount - 1) / 2) * xSpacing
@@ -327,6 +319,7 @@ export default function Home() {
             )
           })}
           {/* Cards */}
+           
           <AnimatePresence>
               { cards.map((card, i) => {
                 let ind = i
@@ -341,13 +334,25 @@ export default function Home() {
                 const colCount = rows[row].length
 
                 const xSpacing = 400
-                const ySpacing = 300
+                const ySpacing = 400
                 
                 const x = 
                   (col - (colCount - 1) / 2) * xSpacing
                 const y = 
                   (row - (rowCount - 1) / 2) * ySpacing
-                
+
+                const CARDS_PER_ROW = 4 
+
+                const lastPlayerCountCard = cards.filter(crd => crd.playerIndex ===
+                  cards.at(-1)?.playerIndex).length
+                console.log("lastPlayerCountCard ", lastPlayerCountCard)
+
+
+                const playerCards = cards.filter(c => c.playerIndex === card.playerIndex)
+                const cardIndexInHand = playerCards.findIndex(c => c.id === card.id)
+
+                const rowOffset = Math.floor(cardIndexInHand / CARDS_PER_ROW)
+                const colOffset = cardIndexInHand % CARDS_PER_ROW
                 return (
                   <motion.div
                     key={card.id}
@@ -356,14 +361,15 @@ export default function Home() {
                       scale: 0.5, rotate: 0
                     }}
                     animate={{
-                      x: x + i * 24,
-                      y: y,
+                      x: x + colOffset * 88,
+                      y: y + rowOffset  * 120,
                       scale: 1, 
                     }}
                     transition={{
                       duration: 0.45, ease:'easeInOut'
                     }}
-                    className="absolute left-1/2 top-1/2 w-20 h-28 bg-white rounded-md flex items-center justify-center font-bold"
+                    className="border-amber-400 border-2 absolute left-1/2 top-1/2
+                    w-20 h-28 bg-white rounded-md flex items-center justify-center font-bold"
                   >
                     { card.label }
                   </motion.div>
@@ -371,6 +377,7 @@ export default function Home() {
               })}
 
           </AnimatePresence>
+           
 
           {/* Controls (simulate player decision) */}
           <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex gap-4">
