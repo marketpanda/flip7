@@ -2,7 +2,21 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence, number } from "motion/react";
 import { nanoid } from 'nanoid'
-
+import cardBack from './assets/cards/card_back.jpeg'
+import cardFlip3 from './assets/cards/card_flip_three.png'
+import card0 from './assets/cards/card_0.png'
+import card1 from './assets/cards/card_1.png'
+import card2 from './assets/cards/card_2.png'
+import card3 from './assets/cards/card_3.png'
+import card4 from './assets/cards/card_4.png'
+import card5 from './assets/cards/card_5.png'
+import card6 from './assets/cards/card_6.png'
+import card7 from './assets/cards/card_7.png'
+import card8 from './assets/cards/card_8.png'
+import card9 from './assets/cards/card_9.png'
+import card10 from './assets/cards/card_10.png'
+import card11 from './assets/cards/card_11.png'
+import card12 from './assets/cards/card_12.png'
 
 type PlayerAction = 'idle' | 'take' | 'skip'
 
@@ -278,11 +292,54 @@ export default function Home() {
     setIsOpenModal(false)
   }
 
+  const parseBackground = (card: Card) => {
+    console.log('parsing card', card)
+    console.log('bg ', `bg-[url(${cardFlip3.src})]`)
+    switch (card.type) {
+      case 0:
+        return `${card0.src}`
+      case 1:
+        return `${card1.src}`
+      case 2:
+        return `${card2.src}`
+      case 3:
+        return `${card3.src}`
+      case 4:
+        return `${card4.src}`
+      case 5:
+        return `${card5.src}`
+      case 6:
+        return `${card6.src}`
+      case 7:
+        return `${card7.src}`
+      case 8:
+        return `${card8.src}`
+      case 9:
+        return `${card9.src}`
+      case 10:
+        return `${card10.src}`
+      case 11:
+        return `${card11.src}`
+      case 12:
+        return `${card12.src}`
+      case 'flip3':
+        return `${cardFlip3.src}`
+      default:
+        return `${cardFlip3.src}`
+    }
+  }
 
 
   useEffect(() => {
     setIsOpenModal(idlePlayers.length === PLAYER_COUNT - 1)
   }, [idlePlayers])
+
+  useEffect(() => {
+    console.log("current2 card ", cards.at(-1)?.label)
+  }, [cards])
+
+
+
   const Modal = () => {
     return (
 
@@ -298,6 +355,11 @@ export default function Home() {
                       onClick={resetGame}
                       className="bg-amber-600 px-2 py-1 rounded text-white">
                       reset
+                    </button>
+                    <button
+                      onClick={() => setIsOpenModal(false)}
+                      className="bg-amber-600 px-2 py-1 rounded text-white">
+                      close
                     </button>
                   </div>
                 </div>
@@ -315,10 +377,21 @@ export default function Home() {
 
       {isOpenModal ? <Modal /> : null}
       <main>
-        <div className="relative w-screen h-screen bg-fuchsia-100 overflow-hidden border-amber-300 border-2">
+        <div className="relative w-screen h-screen bg-fuchsia-100 overflow-hidden">
+
+
+
           {/* Deck */}
-          <div className="absolute left-1/2 bottom-0 w-2- h-28 bg-red-500 rounded-md -translate-x-1/2 -translate-y-1/2 flex items-center justify-center text-white">
+          <div className="
+            absolute left-1/2 bottom-8
+            w-20 h-28
+            bg-cover bg-center
+            rounded-md -translate-x-1/2 -translate-y-1/2
+            flex items-center justify-center text-white"
+            style={{ backgroundImage: `url(${cardBack.src ?? cardBack})` }}
+          >
             Deck ({deck.length})
+
           </div>
 
           {Array.from({ length: PLAYER_COUNT }).map((_, i) => {
@@ -342,7 +415,7 @@ export default function Home() {
             return (
               <div
                 key={i}
-                className="absolute font-bold transition-all border-2 border-red-700 px-2 py-1 rounded"
+                className="absolute font-bold bg-gray-800 transition-all border-2 border-red-700 px-2 py-1 rounded"
                 style={{
                   left: "50%",
                   top: "50%",
@@ -350,7 +423,7 @@ export default function Home() {
                   color: currentPlayer === i ? "yellow" : "white",
                 }}
               >
-                <div className="text-black text-2xl">
+                <div className="text-white text-2xl" >
                   Player {i + 1}
                 </div>
 
@@ -410,10 +483,19 @@ export default function Home() {
                   transition={{
                     duration: 0.45, ease: 'easeInOut'
                   }}
-                  className="border-amber-400 border-2 absolute left-1/2 top-1/2
-                    w-20 h-28 bg-white rounded-md flex items-center justify-center font-bold"
+                  className="
+                    border-amber-400 border-2
+                    absolute left-1/2 top-1/2
+                    w-20 h-28
+                    bg-white rounded-md
+                    bg-cover bg-center bg-no-repeat
+                    text-center
+                    flex items-center justify-center
+                    p-2 font-bold"
+
+                  style={{ backgroundImage: `url(${parseBackground(card) ?? cardBack.src ?? cardBack})` }}
                 >
-                  {card.label}
+                  {/* {card.label} */}
                 </motion.div>
               )
             })}
@@ -439,7 +521,7 @@ export default function Home() {
 
           </div>
         </div>
-      </main>
+      </main >
     </>
 
 
