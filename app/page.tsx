@@ -1,9 +1,17 @@
 'use client'
 import { useEffect, useMemo, useRef, useState } from "react";
-import { motion, AnimatePresence, number } from "motion/react";
+import { motion, AnimatePresence } from "motion/react";
 import { nanoid } from 'nanoid'
 import cardBack from './assets/cards/card_back.jpeg'
 import cardFlip3 from './assets/cards/card_flip_three.png'
+import cardSecondChance from './assets/cards/card_second_chance.png'
+import cardFreeze from './assets/cards/card_freeze.png'
+import cardX2 from './assets/cards/card_x2.png'
+import cardPlus2 from './assets/cards/card_+2.png'
+import cardPlus4 from './assets/cards/card_+4.png'
+import cardPlus6 from './assets/cards/card_+6.png'
+import cardPlus8 from './assets/cards/card_+8.png'
+import cardPlus10 from './assets/cards/card_+10.png'
 import card0 from './assets/cards/card_0.png'
 import card1 from './assets/cards/card_1.png'
 import card2 from './assets/cards/card_2.png'
@@ -71,7 +79,7 @@ const initializeDeck = (): DeckProps[] => {
     }))
   )
 
-  const threeZeroes = Array.from(
+  const zero = Array.from(
     { length: 1 },
     (_, index) => ({
       id: nanoid(),
@@ -111,7 +119,7 @@ const initializeDeck = (): DeckProps[] => {
     ...actionCards,
     ...modifiersCards,
     ...numberCards,
-    ...threeZeroes
+    ...zero
   ]
 
   return merged
@@ -247,7 +255,7 @@ export default function Home() {
     setTimeout(() => {
       nextTurn()
       servingRef.current = false
-    }, 300)
+    }, 500)
   }
 
 
@@ -324,8 +332,24 @@ export default function Home() {
         return `${card12.src}`
       case 'flip3':
         return `${cardFlip3.src}`
+      case 'freeze':
+        return `${cardFreeze.src}`
+      case 'secondChance':
+        return `${cardSecondChance.src}`
+      case 'x2':
+        return `${cardX2.src}`
+      case '+2':
+        return `${cardPlus2.src}`
+      case '+4':
+        return `${cardPlus4.src}`
+      case '+6':
+        return `${cardPlus6.src}`
+      case '+8':
+        return `${cardPlus8.src}`
+      case '+10':
+        return `${cardPlus10.src}`
       default:
-        return `${cardFlip3.src}`
+        return ``
     }
   }
 
@@ -338,31 +362,37 @@ export default function Home() {
     console.log("current2 card ", cards.at(-1)?.label)
   }, [cards])
 
-
-
   const Modal = () => {
     return (
-
       <>
         {
           isOpenModal && (
 
-            <div className="fixed inset-0 flex items-center justify-center z-50">
-              <div className="bg-white w-[400px] h-52 rounded-md">
-                <div className="p-2 bg-neutral-100">
-                  <div>
+            <div className="fixed inset-0 flex items-center justify-center z-50 bg-black/40">
+              {/* Added flex, flex-col, items-center, and justify-center to parent white box */}
+              <div className="bg-white w-[400px] h-52 rounded-md relative flex flex-col items-center justify-center pb-12">
+
+                {/* Corrected "item-center" typo to "items-center" and adjusted layout */}
+                <div className="flex items-center justify-center text-sm font-semibold text-neutral-800 cursor-default select-none">
+                  Game is over. Click reset
+                </div>
+
+                {/* Fixed layout positioning class here from left- 0 to left-0 */}
+                <div className="left-0 p-2 bg-neutral-100 border-t border-gray-200 bottom-0 absolute w-full rounded-b-md">
+                  <div className="flex items-center justify-center gap-3">
                     <button
                       onClick={resetGame}
-                      className="bg-amber-600 px-2 py-1 rounded text-white">
+                      className="bg-amber-600 px-2 py-1 rounded text-white w-[100px] hover:bg-amber-700 transition-colors">
                       reset
                     </button>
                     <button
                       onClick={() => setIsOpenModal(false)}
-                      className="bg-amber-600 px-2 py-1 rounded text-white">
+                      className="bg-amber-600 px-2 py-1 rounded text-white w-[100px] hover:bg-amber-700 transition-colors">
                       close
                     </button>
                   </div>
                 </div>
+
               </div>
             </div>
           )
@@ -379,18 +409,26 @@ export default function Home() {
       <main>
         <div className="relative w-screen h-screen bg-fuchsia-100 overflow-hidden">
 
-
-
           {/* Deck */}
-          <div className="
-            absolute left-1/2 bottom-8
-            w-20 h-28
-            bg-cover bg-center
-            rounded-md -translate-x-1/2 -translate-y-1/2
-            flex items-center justify-center text-white"
+          <span className="
+            absolute left-1/2 bottom-[200px]            
+            -translate-x-1/2
+            font-bold text-neutral-700          
+            flex items-center justify-center
+          ">
+            Deck ({deck.length})
+          </span>
+          <div
+            onClick={() => handleAction('take')}
+            className="
+              absolute left-1/2 bottom-8
+              w-[104px] h-[144px]
+              bg-cover bg-center
+              rounded-md -translate-x-1/2 -translate-y-1/2
+              flex items-center justify-center text-white
+              cursor-pointer"
             style={{ backgroundImage: `url(${cardBack.src ?? cardBack})` }}
           >
-            Deck ({deck.length})
 
           </div>
 
@@ -415,11 +453,14 @@ export default function Home() {
             return (
               <div
                 key={i}
-                className="absolute font-bold bg-gray-800 transition-all border-2 border-red-700 px-2 py-1 rounded"
+                className={`
+                  absolute font-bold bg-gray-800
+                  ${currentPlayer === i ? 'shadow-[0px_0px_48px_14px_rgba(255,46,46,0.7)]' : ''}
+                  transition-all border-2 border-red-700 px-2 py-1 rounded`}
                 style={{
                   left: "50%",
                   top: "50%",
-                  transform: `translate(${x}px, ${y}px)`,
+                  transform: `translate(calc(-50% + ${x}px), calc(-50% + ${y}px))`,
                   color: currentPlayer === i ? "yellow" : "white",
                 }}
               >
@@ -472,12 +513,23 @@ export default function Home() {
                 <motion.div
                   key={card.id}
                   initial={{
+
+
+                    left: "50%",
+                    bottom: "300px",
+                    top: "unset",
                     x: 0, y: 0,
-                    scale: 0.5, rotate: 0
+                    translateX: "-210%", // Centers the element horizontally at its origin
+                    translateY: "-20%", // Centers the element vertically at its origin
+                    scale: 0.5,
+                    rotate: 0
                   }}
+
+
                   animate={{
                     x: x + colOffset * 88,
                     y: y + rowOffset * 120,
+
                     scale: 1,
                   }}
                   transition={{
@@ -505,19 +557,19 @@ export default function Home() {
 
           {/* Controls (simulate player decision) */}
           <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex gap-4">
-            <button onClick={() => handleAction('take')}
+            {/* <button onClick={() => handleAction('take')}
               className="px-4 py-2 bg-green-500 rounded text-white">
               Get Card
-            </button>
+            </button> */}
             <button onClick={() => handleAction('skip')}
               className="px-4 py-2 bg-gray-500 rounded text-white">
               Skip
             </button>
 
             {/* Current turn indicator */}
-            <div className="absolute top-4 left-1/2 -translate-x-1/2 text-white">
+            {/* <div className="absolute top-4 left-1/2 -translate-x-1/2 text-white">
               Current Player: {currentPlayer + 1}
-            </div>
+            </div> */}
 
           </div>
         </div>
