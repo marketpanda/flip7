@@ -127,6 +127,13 @@ const initializeDeck = (): DeckProps[] => {
 
 const PLAYER_COUNT = 3
 const PLAYER_COUNT2 = 6
+const PLAYER_X_SPACING = 400
+const PLAYER_Y_SPACING = 400
+const PLAYER_LABEL_Y_OFFSET = -80
+const PLAYER_CARD_GAP = 16
+const CARD_X_GAP = 88
+const CARD_ROW_GAP = 120
+const CARDS_PER_ROW = 4
 
 const shuffle = (orig: DeckProps[]) => {
   const mergedItems = [...orig]
@@ -214,9 +221,10 @@ export default function Home() {
   const nextTurn = () => {
 
     setCurrentPlayer((prev) => {
+
       const valid = Array.from({ length: PLAYER_COUNT }, (_, i) => i).filter(n => !idlePlayers.includes(n))
 
-      let next = prev
+      let next = prev      
 
       do {
         next = (next + 1) % PLAYER_COUNT
@@ -233,7 +241,13 @@ export default function Home() {
 
 
   const handleAction = (action: PlayerAction) => {
+    console.log('handling')
+    console.log('idlePlayers ', idlePlayers)
+    if (idlePlayers.length > 1) return
+
     if (servingRef.current) return
+    
+    const pCards = evaluatePlayerCards(cards, currentPlayer)    
 
     servingRef.current = true
     setActions(prev => {
@@ -242,15 +256,10 @@ export default function Home() {
       return updated
     })
 
-
-
-    const pCards = evaluatePlayerCards(cards, currentPlayer)
     if (action === 'take' && pCards.length < 7) {
       console.log('current p cards', pCards)
       dealCard(currentPlayer)
     }
-
-
 
     setTimeout(() => {
       nextTurn()
@@ -281,7 +290,7 @@ export default function Home() {
       .filter(c => Number(c.type) >= 0)
 
     const hasDuplicate = checkDuplicateCards(playerCards)
-    if (hasDuplicate) {
+    if (hasDuplicate || playerCards.length === 7) {
       console.log(currentPlayer)
       setIdlePlayers(prev => {
         if (prev.includes(currentPlayer)) return prev
@@ -301,8 +310,7 @@ export default function Home() {
   }
 
   const parseBackground = (card: Card) => {
-    console.log('parsing card', card)
-    console.log('bg ', `bg-[url(${cardFlip3.src})]`)
+    
     switch (card.type) {
       case 0:
         return `${card0.src}`
@@ -355,7 +363,13 @@ export default function Home() {
 
 
   useEffect(() => {
-    setIsOpenModal(idlePlayers.length === PLAYER_COUNT - 1)
+    if (idlePlayers.length === PLAYER_COUNT - 1) {
+      const timer = setTimeout(() => {
+        setIsOpenModal(true)
+      }, 1000)
+
+      return () => clearTimeout(timer)
+    }
   }, [idlePlayers])
 
   useEffect(() => {
@@ -370,15 +384,15 @@ export default function Home() {
 
             <div className="fixed inset-0 flex items-center justify-center z-50 bg-black/40">
               {/* Added flex, flex-col, items-center, and justify-center to parent white box */}
-              <div className="bg-white w-[400px] h-52 rounded-md relative flex flex-col items-center justify-center pb-12">
+              <div className=" bg-neutral-200/50  w-[400px] h-52 rounded-md relative flex flex-col items-center justify-center pb-12">
 
                 {/* Corrected "item-center" typo to "items-center" and adjusted layout */}
-                <div className="flex items-center justify-center text-sm font-semibold text-neutral-800 cursor-default select-none">
+                <div className="flex   items-center justify-center text-sm font-semibold text-neutral-800 cursor-default select-none">
                   Game is over. Click reset
                 </div>
 
                 {/* Fixed layout positioning class here from left- 0 to left-0 */}
-                <div className="left-0 p-2 bg-neutral-100 border-t border-gray-200 bottom-0 absolute w-full rounded-b-md">
+                <div className="left-0 p-2 bg-neutral-200/50 border-t border-gray-200 bottom-0 absolute w-full rounded-b-md">
                   <div className="flex items-center justify-center gap-3">
                     <button
                       onClick={resetGame}
@@ -441,14 +455,13 @@ export default function Home() {
             const rowCount = rows.length
             const colCount = rows[row].length
 
-            const xSpacing = 400
-            const ySpacing = 400
-
             const x =
-              (col - (colCount - 1) / 2) * xSpacing
+              (col - (colCount - 1) / 2) * PLAYER_X_SPACING
 
             const y =
-              (row - (rowCount - 1) / 2) * ySpacing - 80
+              (row - (rowCount - 1) / 2) * PLAYER_Y_SPACING + PLAYER_LABEL_Y_OFFSET
+
+            const playerCards = cards.filter(card => card.playerIndex === i)
 
             return (
               <div
@@ -471,88 +484,60 @@ export default function Home() {
                 <div className="text-xs opacity-70 tex">
                   {actions[i]}
                 </div>
+
+                <div
+                  className="absolute left-1/2 top-full w-[344px] -translate-x-1/2"
+                  style={{ marginTop: PLAYER_CARD_GAP }}
+                >
+                  <AnimatePresence>
+                    {playerCards.map((card, cardIndexInHand) => {
+                      const rowOffset = Math.floor(cardIndexInHand / CARDS_PER_ROW)
+                      const colOffset = cardIndexInHand % CARDS_PER_ROW
+
+                      return (
+                        <motion.div
+                          key={card.id}
+                          initial={{
+                            x: CARD_X_GAP * 1.5,
+                            y: -80,
+                            scale: 0.5,
+                            opacity: 0,
+                          }}
+                          animate={{
+                            x: colOffset * CARD_X_GAP,
+                            y: rowOffset * CARD_ROW_GAP,
+                            scale: 1,
+                            opacity: 1,
+                          }}
+                          exit={{
+                            scale: 0.5,
+                            opacity: 0,
+                          }}
+                          transition={{
+                            duration: 0.45, ease: 'easeInOut'
+                          }}
+                          className="
+                            border-amber-400 border-2
+                            absolute left-0 top-0
+                            w-20 h-28
+                            bg-white rounded-md
+                            bg-cover bg-center bg-no-repeat
+                            text-center
+                            flex items-center justify-center
+                            p-2 font-bold"
+
+                          style={{ backgroundImage: `url(${parseBackground(card) ?? cardBack.src ?? cardBack})` }}
+                        >
+                          {/* {card.label} */}
+                        </motion.div>
+                      )
+                    })}
+
+                  </AnimatePresence>
+                </div>
               </div>
             )
           })}
-          {/* Cards */}
-
-          <AnimatePresence>
-            {cards.map((card, i) => {
-              let ind = i
-              // const pos = getPlayerPos(card.playerIndex)
-
-              const pos = positionMap.get(card.playerIndex)
-              if (!pos) return null
-
-              const { row, col } = pos
-
-              const rowCount = rows.length
-              const colCount = rows[row].length
-
-              const xSpacing = 400
-              const ySpacing = 400
-
-              const x =
-                (col - (colCount - 1) / 2) * xSpacing
-              const y =
-                (row - (rowCount - 1) / 2) * ySpacing
-
-              const CARDS_PER_ROW = 4
-
-              const lastPlayerCountCard = cards.filter(crd => crd.playerIndex ===
-                cards.at(-1)?.playerIndex).length
-              console.log("lastPlayerCountCard ", lastPlayerCountCard)
-
-
-              const playerCards = cards.filter(c => c.playerIndex === card.playerIndex)
-              const cardIndexInHand = playerCards.findIndex(c => c.id === card.id)
-
-              const rowOffset = Math.floor(cardIndexInHand / CARDS_PER_ROW)
-              const colOffset = cardIndexInHand % CARDS_PER_ROW
-              return (
-                <motion.div
-                  key={card.id}
-                  initial={{
-
-
-                    left: "50%",
-                    bottom: "300px",
-                    top: "unset",
-                    x: 0, y: 0,
-                    translateX: "-210%", // Centers the element horizontally at its origin
-                    translateY: "-20%", // Centers the element vertically at its origin
-                    scale: 0.5,
-                    rotate: 0
-                  }}
-
-
-                  animate={{
-                    x: x + colOffset * 88,
-                    y: y + rowOffset * 120,
-
-                    scale: 1,
-                  }}
-                  transition={{
-                    duration: 0.45, ease: 'easeInOut'
-                  }}
-                  className="
-                    border-amber-400 border-2
-                    absolute left-1/2 top-1/2
-                    w-20 h-28
-                    bg-white rounded-md
-                    bg-cover bg-center bg-no-repeat
-                    text-center
-                    flex items-center justify-center
-                    p-2 font-bold"
-
-                  style={{ backgroundImage: `url(${parseBackground(card) ?? cardBack.src ?? cardBack})` }}
-                >
-                  {/* {card.label} */}
-                </motion.div>
-              )
-            })}
-
-          </AnimatePresence>
 
 
           {/* Controls (simulate player decision) */}
