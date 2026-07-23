@@ -1,5 +1,23 @@
 # Flip 7 MVP Plan
 
+## Implementation status
+
+The local MVP is implemented as of July 2026:
+
+- [x] Typed 94-card deck and reducer-driven game phases
+- [x] Three to six named players
+- [x] Hit, Stay, duplicate busts, and Flip 7
+- [x] Freeze, Flip Three, and Second Chance
+- [x] Modifier scoring, round totals, 200-point wins, and tie continuation
+- [x] Responsive setup, board, rules, targeting, and results interfaces
+- [x] Automated rule-engine tests
+- [x] Passing lint and production build
+- [ ] Artwork and branding cleared for public distribution
+- [ ] Full cross-browser and physical-device QA
+- [ ] Preview deployment approved and promoted to production
+
+The remaining work is release preparation rather than core gameplay implementation.
+
 ## 1. Product goal
 
 Ship a stable, public, browser-based Flip 7-style game that a group can play together on one device from setup through a final winner.

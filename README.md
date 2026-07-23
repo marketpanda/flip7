@@ -1,32 +1,35 @@
 # Flip 7 Card Game
 
-A browser-based prototype inspired by the push-your-luck card game **Flip 7**. Players take turns drawing cards, trying to collect seven unique number cards without revealing a duplicate.
+A browser-based, local pass-and-play game inspired by the push-your-luck card game **Flip 7**. Draw unique numbers, bank your points before you bust, and race to 200.
 
 ![Flip 7 game board](./flip7.png)
 
 ## How to play
 
-This version runs as a local three-player pass-and-play game:
+This version supports three to six players sharing one device:
 
-1. Click the deck to draw a card for the highlighted player.
-2. Avoid drawing a number already held by that player—a duplicate knocks them out of the round.
-3. Click **Skip** to stop drawing and pass the turn.
-4. A player is also finished when they collect seven unique number cards.
-5. When the round ends, use **Reset** to shuffle a new deck and play again.
+1. Choose the player count, enter names, and start the game.
+2. Deal one opening card to each player.
+3. On your turn, choose **Hit** to draw or **Stay** to bank your points.
+4. Drawing a duplicate number busts you for zero round points unless you have a Second Chance.
+5. Seven unique number cards immediately end the round and award a 15-point bonus.
+6. Continue playing rounds until one player has the unique highest score at 200 or more.
 
 ## Current features
 
 - Shuffled deck with number cards from 0 to 12
-- Three-player turn rotation
-- Animated card dealing and player highlighting
+- Setup for three to six named players
+- Correct Hit, Stay, bust, and eligible-player rotation
 - Duplicate-number detection
-- Seven-card completion detection
-- Flip Three, Freeze, and Second Chance cards
-- `+2`, `+4`, `+6`, `+8`, `+10`, and `×2` modifier cards
-- Remaining-card counter and round reset
-
-> [!NOTE]
-> This is an early prototype. Special and modifier cards are included in the deck and rendered on the board, but their gameplay effects are not implemented yet. Scoring, winner calculation, and complete official rules are also still to come.
+- Second Chance duplicate protection
+- Freeze targeting and score banking
+- Sequential Flip Three resolution
+- `+2`, `+4`, `+6`, `+8`, `+10`, and `×2` scoring
+- Flip 7 detection and 15-point bonus
+- Multi-round totals, ties, and winner calculation
+- Responsive phone, tablet, and desktop layout
+- Keyboard focus states, semantic controls, and status announcements
+- Automated tests for deck composition, scoring, turns, actions, and rounds
 
 ## Tech stack
 
@@ -34,7 +37,7 @@ This version runs as a local three-player pass-and-play game:
 - [React](https://react.dev/) 19
 - [TypeScript](https://www.typescriptlang.org/)
 - [Tailwind CSS](https://tailwindcss.com/) 4
-- [Motion](https://motion.dev/) for card animations
+- [Vitest](https://vitest.dev/) for game-engine tests
 
 ## Getting started
 
@@ -59,6 +62,7 @@ npm run dev    # Start the development server
 npm run build  # Create a production build
 npm run start  # Run the production build
 npm run lint   # Check the code with ESLint
+npm run test   # Run the game-engine test suite
 ```
 
 ## Project structure
@@ -66,20 +70,20 @@ npm run lint   # Check the code with ESLint
 ```text
 app/
 ├── assets/cards/     # Number, action, modifier, and card-back artwork
-├── components/       # Reusable UI components
+├── components/       # Setup, board, player, card, and dialog UI
+├── game/             # Typed deck, rules, scoring, reducer, and tests
 ├── globals.css       # Global styles and Tailwind setup
 ├── layout.tsx        # Root application layout
-└── page.tsx          # Game state, rules, controls, and board UI
+└── page.tsx          # Server-rendered route and client game boundary
 ```
 
 ## Roadmap
 
-- Apply action-card effects
-- Calculate round and total scores
-- Add player names and configurable player counts
-- Improve responsive layouts for smaller screens
-- Add clearer round results and winner states
-- Add automated tests for deck and rule logic
+- Online rooms and real-time multiplayer
+- Optional sound and richer card animations
+- Saved games and player statistics
+- Additional browser-level end-to-end tests
+- Localization
 
 ## Disclaimer
 

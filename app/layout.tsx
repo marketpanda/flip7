@@ -13,8 +13,17 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Flip 7",
-  description: "A fast-paced, push-your-luck ga,e where you try to score points by flipping over cards one by one with drawing a duplicate number",
+  title: "Flip 7 — Push Your Luck",
+  description:
+    "A local pass-and-play card game. Draw unique numbers, bank your points before you bust, and race to 200.",
+  applicationName: "Flip 7",
+  keywords: ["card game", "push your luck", "local multiplayer"],
+  openGraph: {
+    title: "Flip 7 — Push Your Luck",
+    description:
+      "Draw unique numbers, bank your points before you bust, and race to 200.",
+    type: "website",
+  },
 };
 
 export default function RootLayout({
