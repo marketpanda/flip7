@@ -2,6 +2,8 @@
 
 A browser-based, local pass-and-play game inspired by the push-your-luck card game **Flip 7**. Draw unique numbers, bank your points before you bust, and race to 200.
 
+[Play the AWS-hosted demo](https://d2j6uhvhuulblf.cloudfront.net)
+
 ![Flip 7 game board](./flip7.png)
 
 ## How to play
@@ -84,6 +86,9 @@ app/
 - Saved games and player statistics
 - Additional browser-level end-to-end tests
 - Localization
+
+The phased serverless deployment, multiplayer, bot-player, authentication, and
+scoring design is documented in [AWS_MVP_PLAN.md](./AWS_MVP_PLAN.md).
 
 ## Disclaimer
 
