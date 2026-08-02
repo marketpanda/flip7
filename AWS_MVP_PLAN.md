@@ -1060,9 +1060,90 @@ export type RoomCommandRequest =
     }
 ```
 
-Add `packages/contracts/room.ts` for the public room snapshot. It should include
-the room ID, version, status, public players, visible game state, deck count,
-and discard count. It must not contain:
+Add `packages/contracts/room.ts` for the public room snapshot:
+
+```ts
+import type { GameState } from "../game-engine"
+
+/** A player that may be shown in the room lobby. */
+export interface PublicRoomPlayer {
+  playerId: string
+  displayName: string
+  isHost: boolean
+}
+
+/** Room lifecycle outside the game reducer. */
+export type PublicRoomStatus = "lobby" | "active" | "complete"
+
+/**
+ * The browser-safe portion of GameState. The ordered deck and full discard
+ * pile are replaced by counts.
+ */
+export type PublicGameState = Omit<GameState, "deck" | "discard"> & {
+  deckCount: number
+  discardCount: number
+}
+
+/** The complete room object that HTTP and WebSocket responses may expose. */
+export interface PublicRoomSnapshot {
+  roomId: string
+  version: number
+  status: PublicRoomStatus
+  players: PublicRoomPlayer[]
+  game: PublicGameState | null
+}
+```
+
+The fields have these meanings:
+
+| Field | Meaning |
+| --- | --- |
+| `roomId` | Shareable room code, such as `AB12CD` |
+| `version` | Authoritative version incremented after each successful change |
+| `status` | Room is waiting, playing, or finished |
+| `players` | Public lobby identities, including which player is the host |
+| `game` | Visible game state, or `null` while still in the lobby |
+| `deckCount` | Number of cards remaining without revealing their order |
+| `discardCount` | Number of discarded cards without returning the full pile |
+
+Example safe response shape:
+
+```json
+{
+  "roomId": "AB12CD",
+  "version": 4,
+  "status": "active",
+  "players": [
+    {
+      "playerId": "player-123",
+      "displayName": "Alice",
+      "isHost": true
+    },
+    {
+      "playerId": "player-456",
+      "displayName": "Bob",
+      "isHost": false
+    }
+  ],
+  "game": {
+    "players": [],
+    "dealerIndex": 0,
+    "currentPlayerId": "player-123",
+    "openingHandled": [],
+    "phase": "player-turn",
+    "round": 1,
+    "event": "Alice, hit or stay?",
+    "actionRequest": null,
+    "flipResolution": null,
+    "roundResults": [],
+    "winnerIds": [],
+    "deckCount": 76,
+    "discardCount": 2
+  }
+}
+```
+
+The public snapshot must not contain:
 
 - the ordered deck or full discard pile;
 - session tokens or token hashes;
@@ -1070,6 +1151,11 @@ and discard count. It must not contain:
 - processed command IDs;
 - WebSocket connection IDs;
 - DynamoDB implementation details.
+
+`PublicRoomSnapshot` is only a compile-time description; it does not remove
+private properties at runtime. Do not return a DynamoDB item merely by casting
+it to this type. AWS-008 must construct the response using `sanitizeRoom` and
+explicitly select the public fields.
 
 Add `packages/contracts/index.ts`:
 
@@ -1101,10 +1187,190 @@ sanitizeRoom(room)
 PublicRoomSnapshot (safe for browser/WebSocket)
 ```
 
-Write a contract-level type test or fixture showing the expected public JSON.
-When the service sanitizer is implemented, add a runtime test that asserts the
-serialized response does not contain `deck`, `sessionHash`, `processedCommandIds`,
-or `connectionId`.
+There are two separate pieces of work. Complete Part A during AWS-006 and leave
+Part B until AWS-008.
+
+###### Part A — Create a public contract fixture now
+
+Add `packages/contracts/room.test.ts`. This fixture proves that the intended
+browser response satisfies `PublicRoomSnapshot` and documents its JSON shape:
+
+```ts
+import { describe, expect, it } from "vitest"
+import type { PublicRoomSnapshot } from "./room"
+
+const publicRoomFixture = {
+  roomId: "AB12CD",
+  version: 4,
+  status: "active",
+  players: [
+    {
+      playerId: "player-1",
+      displayName: "Alice",
+      isHost: true,
+    },
+    {
+      playerId: "player-2",
+      displayName: "Bob",
+      isHost: false,
+    },
+  ],
+  game: {
+    players: [
+      {
+        id: "player-1",
+        name: "Alice",
+        cards: [],
+        secondChance: null,
+        status: "active",
+        totalScore: 0,
+      },
+      {
+        id: "player-2",
+        name: "Bob",
+        cards: [],
+        secondChance: null,
+        status: "active",
+        totalScore: 0,
+      },
+    ],
+    dealerIndex: 0,
+    currentPlayerId: "player-1",
+    openingHandled: ["player-1", "player-2"],
+    phase: "player-turn",
+    round: 1,
+    event: "Alice, hit or stay?",
+    actionRequest: null,
+    flipResolution: null,
+    roundResults: [],
+    winnerIds: [],
+    deckCount: 77,
+    discardCount: 0,
+  },
+} satisfies PublicRoomSnapshot
+
+describe("PublicRoomSnapshot", () => {
+  it("documents a browser-safe room response", () => {
+    const serialized = JSON.stringify(publicRoomFixture)
+
+    expect(publicRoomFixture.roomId).toBe("AB12CD")
+    expect(publicRoomFixture.game.deckCount).toBe(77)
+    expect(serialized).not.toContain('"deck":')
+    expect(serialized).not.toContain('"discard":')
+    expect(serialized).not.toContain('"sessionHash":')
+    expect(serialized).not.toContain('"processedCommandIds":')
+    expect(serialized).not.toContain('"connectionId":')
+  })
+})
+```
+
+Run:
+
+```powershell
+npm run test
+npx tsc --noEmit
+```
+
+This test documents the public contract, but it does not prove that a future
+server correctly removes private data. There is no internal DynamoDB room item
+or sanitizer yet, so do not create a fake production sanitizer under
+`packages/contracts` merely to make this test more elaborate.
+
+###### Part B — Implement the runtime sanitizer in AWS-008
+
+After AWS-007 defines the tables and AWS-008 adds the game service, create:
+
+```text
+services/game-api/
+  persistence/room-item.ts       Private DynamoDB RoomItem type
+  shared/sanitize-room.ts        Private-to-public conversion
+  shared/sanitize-room.test.ts   Runtime data-leak tests
+```
+
+The private `RoomItem` will contain service-only fields in addition to the full
+`GameState`. Its approximate shape will be:
+
+```ts
+interface RoomMember {
+  guestId: string
+  playerId: string
+  displayName: string
+}
+
+interface RoomItem {
+  roomId: string
+  version: number
+  status: "lobby" | "active" | "complete"
+  hostPlayerId: string
+  members: RoomMember[]
+  game: GameState | null
+  processedCommandIds: string[]
+  expiresAt: number
+}
+```
+
+Do not export `RoomItem` to browser code or put it in `packages/contracts`.
+Implement the service-only conversion with explicit public selections:
+
+```ts
+import type { GameState } from "../../../packages/game-engine"
+import type {
+  PublicGameState,
+  PublicRoomSnapshot,
+} from "../../../packages/contracts"
+import type { RoomItem } from "../persistence/room-item"
+
+function sanitizeGame(game: GameState | null): PublicGameState | null {
+  if (!game) return null
+
+  const { deck, discard, ...visibleGame } = game
+
+  return {
+    ...visibleGame,
+    deckCount: deck.length,
+    discardCount: discard.length,
+  }
+}
+
+export function sanitizeRoom(room: RoomItem): PublicRoomSnapshot {
+  return {
+    roomId: room.roomId,
+    version: room.version,
+    status: room.status,
+    players: room.members.map((member) => ({
+      playerId: member.playerId,
+      displayName: member.displayName,
+      isHost: member.playerId === room.hostPlayerId,
+    })),
+    game: sanitizeGame(room.game),
+  }
+}
+```
+
+Notice that the function does not spread `room` into the response. It selects
+each permitted room field explicitly. Only the pure `GameState` remainder is
+spread after `deck` and `discard` have been removed.
+
+The AWS-008 runtime test must construct a private room containing a real ordered
+deck and private service fields, call `sanitizeRoom`, and inspect the serialized
+result:
+
+```ts
+const result = sanitizeRoom(privateRoomFixture)
+const serialized = JSON.stringify(result)
+
+expect(result.game?.deckCount).toBe(privateRoomFixture.game?.deck.length)
+expect(serialized).not.toContain('"deck":')
+expect(serialized).not.toContain('"discard":')
+expect(serialized).not.toContain('"guestId":')
+expect(serialized).not.toContain('"sessionHash":')
+expect(serialized).not.toContain('"processedCommandIds":')
+expect(serialized).not.toContain('"connectionId":')
+expect(serialized).not.toContain('"expiresAt":')
+```
+
+This runtime test is the security check that catches accidental private-field
+leaks. Run it for both an active room and a lobby where `game` is `null`.
 
 ##### Step 6.8 — Verify and stop at the AWS-006 boundary
 

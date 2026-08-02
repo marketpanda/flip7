@@ -2,14 +2,14 @@
 
 import { useReducer, useState, type FormEvent } from "react"
 import cardBack from "../assets/cards/card_back.jpeg"
-import { createGame, gameReducer, openingPlayer } from "../game/reducer"
-import { calculateRoundScore } from "../game/rules"
+import { createGame, gameReducer, openingPlayer } from "../../packages/game-engine/reducer"
+import { calculateRoundScore } from "../../packages/game-engine/rules"
 import {
   FLIP_SEVEN_BONUS,
   WINNING_SCORE,
   type GameAction,
   type GameState,
-} from "../game/types"
+} from "../../packages/game-engine/types"
 import PlayerPanel from "./PlayerPanel"
 
 type SessionAction =

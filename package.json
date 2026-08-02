@@ -11,9 +11,11 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "vitest run app"
+    "test": "vitest run app packages services"
   },
   "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.1101.0",
+    "@aws-sdk/lib-dynamodb": "^3.1101.0",
     "nanoid": "^5.1.11",
     "next": "^16.2.11",
     "react": "19.2.4",

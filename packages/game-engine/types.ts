@@ -40,6 +40,11 @@ export interface ActionCard extends CardBase {
 export type Card = NumberCard | ModifierCard | MultiplierCard | ActionCard
 export type ScoreCard = NumberCard | ModifierCard | MultiplierCard
 
+export interface GamePlayerInput {
+  id: string
+  name: string
+}
+
 export interface Player {
   id: string
   name: string

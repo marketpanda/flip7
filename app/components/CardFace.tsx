@@ -21,7 +21,7 @@ import cardFlipThree from "../assets/cards/card_flip_three.png"
 import cardFreeze from "../assets/cards/card_freeze.png"
 import cardSecondChance from "../assets/cards/card_second_chance.png"
 import cardX2 from "../assets/cards/card_x2.png"
-import type { Card } from "../game/types"
+import type { Card } from "../../packages/game-engine/types"
 
 const numberImages: Record<number, StaticImageData> = {
   0: card0,

@@ -8,6 +8,7 @@ import {
   uniqueWinningIds,
 } from "./rules"
 import {
+  GamePlayerInput,
   WINNING_SCORE,
   type ActionCard,
   type ActionRequest,
@@ -609,6 +610,35 @@ function nextRound(state: GameState): GameState {
     phase: "opening-deal",
     round: state.round + 1,
     event: `${players[dealerIndex].name} deals the opening cards.`,
+    actionRequest: null,
+    flipResolution: null,
+    roundResults: [],
+    winnerIds: [],
+  }
+}
+
+export function createGameForPlayers(
+  inputs: GamePlayerInput[],
+  deck: Card[] = shuffleDeck(createDeck())
+): GameState {
+  const players = inputs.map((input) => ({
+    ...input,
+    cards: [],
+    secondChance: null,
+    status: "active" as const,
+    totalScore: 0,
+  }))
+
+  return {
+    players,
+    deck,
+    discard: [],
+    dealerIndex: 0,
+    currentPlayerId: null,
+    openingHandled: [],
+    phase: "opening-deal",
+    round: 1,
+    event: `${players[0]?.name ?? "The dealer"} deals the opening cards.`,
     actionRequest: null,
     flipResolution: null,
     roundResults: [],

@@ -1,6 +1,6 @@
 import CardFace from "./CardFace"
-import { calculateRoundScore, numberCards } from "../game/rules"
-import type { Player } from "../game/types"
+import { calculateRoundScore, numberCards } from "../../packages/game-engine/rules"
+import type { Player } from "../../packages/game-engine/types"
 
 const statusLabels = {
   active: "In play",
