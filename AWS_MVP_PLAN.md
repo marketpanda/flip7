@@ -431,7 +431,51 @@ Expected results:
 
 `card-game-dev` is the example AWS CLI profile throughout this section. Replace
 it if the configured profile has a different name. If no profile has been
-configured yet, stop and finish Phase 0 before continuing.
+configured yet, create it with temporary AWS Console credentials.
+
+First confirm AWS CLI is version 2.32.0 or newer:
+
+```powershell
+aws --version
+```
+
+Then create and sign in to the profile:
+
+```powershell
+aws login --profile card-game-dev --region ap-southeast-2
+```
+
+The command opens an AWS sign-in page in the browser. Sign in to the intended
+practice account and approve the local-development session. If the browser
+cannot return to the CLI automatically, use:
+
+```powershell
+aws login --remote --profile card-game-dev --region ap-southeast-2
+```
+
+Persist the default deployment region in the new profile. Some AWS CLI versions
+use `--region` for the login request without saving it to the profile:
+
+```powershell
+aws configure set region ap-southeast-2 --profile card-game-dev
+aws configure set output json --profile card-game-dev
+```
+
+The login uses temporary credentials rather than storing long-lived access
+keys. The session can last for up to 12 hours; run `aws login` again after it
+expires.
+
+Confirm that the profile now exists and resolves to the correct account:
+
+```powershell
+aws configure list-profiles
+aws configure list --profile card-game-dev
+aws sts get-caller-identity --profile card-game-dev
+```
+
+If `aws login` is unavailable, update AWS CLI v2. If the account is managed
+through IAM Identity Center, use `aws configure sso --profile card-game-dev`
+and `aws sso login --profile card-game-dev` instead.
 
 Copy the 12-digit `Account` value returned by `get-caller-identity`. It will be
 used during bootstrapping.
@@ -794,6 +838,297 @@ and the S3 bucket is not public.
 Start with guest users only so multiplayer and authentication are not debugged
 at the same time.
 
+#### AWS-006 — Shared API contracts and extracted game engine
+
+**Outcome:** the browser and the future Lambda service can import the same game
+rules and request/response types without importing React, Next.js, or AWS code.
+
+Complete this ticket before creating the DynamoDB tables or HTTP Lambdas. This
+is a local refactor only; it does not create or change any AWS resources.
+
+##### Step 6.1 — Make a clean checkpoint
+
+Confirm the CDK frontend deployment has passed the Phase 1 exit check. From the
+repository root, inspect the current work:
+
+```powershell
+Set-Location D:\dev\card-game
+git status --short
+```
+
+Commit the completed Phase 1/CDK work before starting this refactor, or at
+least record which changes belong to Phase 1. Do not mix incomplete CDK edits
+with the game-engine extraction.
+
+Because this repository uses Next.js 16, read the locally installed guides
+that apply to the import and project-structure changes before editing code:
+
+```powershell
+Get-Content -Raw node_modules\next\dist\docs\01-app\01-getting-started\02-project-structure.md
+Get-Content -Raw node_modules\next\dist\docs\01-app\03-api-reference\05-config\02-typescript.md
+```
+
+Run the existing checks once to establish a known-good starting point:
+
+```powershell
+npm run lint
+npm run test
+npm run build
+```
+
+Stop and fix any existing failure before moving files.
+
+##### Step 6.2 — Create the shared package folders
+
+Create these source folders at the repository root:
+
+```text
+packages/
+  game-engine/
+  contracts/
+```
+
+For this first extraction, these are source-code folders inside the existing
+root TypeScript project. Do not add npm workspaces, publishable packages, or a
+second copy of React. The root `tsconfig.json` already includes TypeScript files
+under `packages`.
+
+The dependency direction must remain:
+
+```text
+app --------------------> packages/game-engine
+app --------------------> packages/contracts
+future Lambda service --> packages/game-engine
+future Lambda service --> packages/contracts
+```
+
+Neither shared package may import from `app`, `infra`, React, Next.js, or the
+AWS SDK.
+
+##### Step 6.3 — Move the pure game engine
+
+Move these existing files without changing their behaviour yet:
+
+```text
+app/game/cards.ts       -> packages/game-engine/cards.ts
+app/game/reducer.ts     -> packages/game-engine/reducer.ts
+app/game/rules.ts       -> packages/game-engine/rules.ts
+app/game/types.ts       -> packages/game-engine/types.ts
+app/game/game.test.ts   -> packages/game-engine/game.test.ts
+```
+
+Use `git mv` so Git can recognize the files as moves:
+
+```powershell
+New-Item -ItemType Directory -Force packages\game-engine
+New-Item -ItemType Directory -Force packages\contracts
+git mv app\game\cards.ts packages\game-engine\cards.ts
+git mv app\game\reducer.ts packages\game-engine\reducer.ts
+git mv app\game\rules.ts packages\game-engine\rules.ts
+git mv app\game\types.ts packages\game-engine\types.ts
+git mv app\game\game.test.ts packages\game-engine\game.test.ts
+```
+
+Add `packages/game-engine/index.ts` as the public entry point. Re-export the
+functions and types that clients and Lambdas are allowed to use:
+
+```ts
+export * from "./cards"
+export * from "./reducer"
+export * from "./rules"
+export * from "./types"
+```
+
+Keep card artwork and UI components under `app`; only rules, state types, deck
+creation, scoring, and reducer behaviour belong in the engine.
+
+##### Step 6.4 — Give online players stable IDs
+
+The current `createGame(names)` function creates player IDs internally. An
+online room needs to assign a player ID when the player joins and preserve it
+when the match starts.
+
+Add an engine input type and a second constructor:
+
+```ts
+export interface GamePlayerInput {
+  id: string
+  name: string
+}
+
+export function createGameForPlayers(
+  inputs: GamePlayerInput[],
+  deck?: Card[],
+): GameState
+```
+
+`createGameForPlayers` must use the supplied IDs. Keep the existing
+`createGame(names)` function as a wrapper that generates IDs for local
+pass-and-play mode, so the current browser experience does not change.
+
+Add tests proving that:
+
+1. supplied player IDs are preserved;
+2. the supplied player order is preserved;
+3. local `createGame(names)` still creates unique IDs;
+4. a supplied deterministic deck is used unchanged.
+
+Do not add DynamoDB fields, session tokens, room versions, or WebSocket state to
+`GameState`. Those belong to the service layer, not the rules engine.
+
+##### Step 6.5 — Update browser imports and tests
+
+Replace imports such as:
+
+```ts
+import { gameReducer } from "../game/reducer"
+```
+
+with imports through the shared entry point:
+
+```ts
+import { gameReducer } from "@/packages/game-engine"
+```
+
+Update `GameApp.tsx`, `PlayerPanel.tsx`, and `CardFace.tsx`. Internal files
+inside `packages/game-engine` may continue using relative imports.
+
+The root test script currently searches only under `app`. Update it in
+`package.json` from:
+
+```json
+"test": "vitest run app"
+```
+
+to:
+
+```json
+"test": "vitest run app packages"
+```
+
+Run this intermediate check:
+
+```powershell
+npm run test
+npm run lint
+```
+
+Remove the empty `app/game` directory only after no import references it:
+
+```powershell
+rg "app/game|\.\./game|\./game" app packages
+```
+
+An empty directory does not need a Git operation because Git does not track
+empty folders.
+
+##### Step 6.6 — Define shared HTTP contracts
+
+Add `packages/contracts/http.ts` with TypeScript types for the six planned HTTP
+routes. At minimum, define:
+
+```text
+CreateGuestSessionResponse
+CreateRoomRequest
+JoinRoomRequest
+RoomCommandRequest
+CreateSocketTicketResponse
+ApiErrorResponse
+```
+
+Use a discriminated union for commands so each command has the correct payload:
+
+```ts
+export type RoomCommandRequest =
+  | {
+      commandId: string
+      expectedVersion: number
+      type: "start" | "hit" | "stay" | "next-round"
+      payload: Record<string, never>
+    }
+  | {
+      commandId: string
+      expectedVersion: number
+      type: "target"
+      payload: { targetId: string }
+    }
+  | {
+      commandId: string
+      expectedVersion: number
+      type: "leave"
+      payload: Record<string, never>
+    }
+```
+
+Add `packages/contracts/room.ts` for the public room snapshot. It should include
+the room ID, version, status, public players, visible game state, deck count,
+and discard count. It must not contain:
+
+- the ordered deck or full discard pile;
+- session tokens or token hashes;
+- guest/session identity used for authorization;
+- processed command IDs;
+- WebSocket connection IDs;
+- DynamoDB implementation details.
+
+Add `packages/contracts/index.ts`:
+
+```ts
+export * from "./http"
+export * from "./room"
+```
+
+These TypeScript types provide compile-time contracts. Runtime request
+validation will be added at the Lambda boundary in AWS-008; never assume an
+incoming JSON body is valid merely because a TypeScript type exists.
+
+##### Step 6.7 — Add the sanitization boundary
+
+Define the public snapshot type now, but place the actual `sanitizeRoom`
+function in the future game service during AWS-008. The sanitizer needs access
+to the internal room record, which is server-only and does not belong in the
+browser or pure engine package.
+
+The intended boundary is:
+
+```text
+DynamoDB RoomItem (private)
+        |
+        v
+sanitizeRoom(room)
+        |
+        v
+PublicRoomSnapshot (safe for browser/WebSocket)
+```
+
+Write a contract-level type test or fixture showing the expected public JSON.
+When the service sanitizer is implemented, add a runtime test that asserts the
+serialized response does not contain `deck`, `sessionHash`, `processedCommandIds`,
+or `connectionId`.
+
+##### Step 6.8 — Verify and stop at the AWS-006 boundary
+
+From the repository root, run:
+
+```powershell
+npm run lint
+npm run test
+npm run build
+Test-Path .\out\index.html
+git status --short
+```
+
+The last build check must print `True`. Smoke-test local pass-and-play and
+confirm one complete game still works exactly as before.
+
+**AWS-006 exit check:** shared engine tests pass from `packages/game-engine`,
+the existing browser imports the shared engine, stable supplied player IDs are
+tested, shared HTTP/public-room contract types compile, the static export still
+builds, and no AWS resource was created or changed.
+
+Stop here before AWS-007. The HTTP routes below describe the target API; they
+are not created until the tables and Lambda handlers exist.
+
 #### HTTP endpoints
 
 ```text
@@ -858,16 +1193,224 @@ Keep the model understandable by using three tables initially:
 | `Sessions` | `sessionHash` | Guest identity, expiry, optional registered user ID |
 | `Connections` | `connectionId` | Socket connection, room/player IDs, expiry |
 
-Add a Global Secondary Index to `Connections` using `roomId` so a Lambda can
-find all sockets to notify. Use on-demand capacity for the MVP. Add TTL
-attributes for abandoned rooms, guest sessions, socket tickets, and stale
-connections.
+Implement the tables in these steps:
+
+1. Create `Rooms` with `roomId` as its string partition key.
+2. Create `Sessions` with `sessionHash` as its string partition key.
+3. Create `Connections` with `connectionId` as its string partition key.
+4. Set all three tables to DynamoDB on-demand capacity
+   (`BillingMode.PAY_PER_REQUEST` in CDK).
+5. Add an `expiresAt` TTL attribute to all three tables. Store it as Unix epoch
+   seconds.
+6. Store abandoned-room expiry on each `Rooms` item.
+7. Store guest-session and socket-ticket expiry on the applicable `Sessions`
+   items.
+8. Store stale-connection expiry on each `Connections` item.
+9. Add a Global Secondary Index named `roomId-index` to `Connections`, using
+   `roomId` as its partition key.
+10. In the broadcast Lambda, query `roomId-index` with the current room ID to
+    get every connection that should receive the update.
+11. If sending to a connection returns `GoneException`, delete that
+    `Connections` item.
+
+Implement the broadcast on AWS as follows:
+
+1. Create a Lambda named `BroadcastRoomUpdate`.
+2. Give it the `Connections` table name, `roomId-index` index name, and
+   WebSocket API callback URL as environment variables.
+3. Grant it permission to:
+   - query `Connections/roomId-index`;
+   - delete stale items from `Connections`;
+   - call API Gateway's `execute-api:ManageConnections` action.
+4. After the command Lambda successfully saves a new room version, invoke
+   `BroadcastRoomUpdate` with the `roomId` and sanitized room snapshot.
+5. In `BroadcastRoomUpdate`, call DynamoDB `Query` with:
+
+   ```text
+   TableName: Connections table name
+   IndexName: roomId-index
+   KeyConditionExpression: roomId = :roomId
+   ```
+
+6. Loop over the returned `connectionId` values and call API Gateway
+   `PostToConnection` once for each connection.
+7. If the query returns `LastEvaluatedKey`, query the next page and continue
+   until no key remains.
+8. If `PostToConnection` returns `GoneException`, delete that connection from
+   `Connections` and continue notifying the other players.
 
 TTL deletion is asynchronous, so application code must still reject an item
-whose expiry time has passed.
+whose expiry time has passed. After reading an item, compare `expiresAt` with
+the current Unix time before using it:
 
-**Exit check:** two private/incognito browser windows can create, join, play,
-disconnect, reconnect, and finish the same server-owned game.
+```ts
+const now = Math.floor(Date.now() / 1000)
+
+if (item.expiresAt <= now) {
+  // Reject the room, session, ticket, or connection as expired.
+}
+```
+
+Apply this check whenever a Lambda loads a room, validates a guest session,
+consumes a socket ticket, or broadcasts to stored connections. Test both an
+active item and an expired item that DynamoDB has not deleted yet.
+
+#### Prerequisites for the two-browser exit check
+
+Creating the DynamoDB tables does not yet provide create/join functionality.
+Complete the following steps in order before running the exit check.
+
+##### Step 1 — Finish and verify DynamoDB
+
+1. Confirm `Rooms`, `Sessions`, and `Connections` exist.
+2. Confirm all three use on-demand capacity.
+3. Confirm all three use `expiresAt` as their TTL attribute.
+4. Confirm `Connections` has an active `roomId-index` GSI.
+5. Add one temporary connection item and verify that querying
+   `roomId-index` by its `roomId` returns it. Delete the temporary item.
+
+At this point there is still no browser create/join flow.
+
+##### Step 2 — Implement the HTTP Lambdas
+
+Do not create all six functions with untouched defaults. Create and test them
+one at a time, starting with `CreateGuestSession`. Use this common MVP
+configuration:
+
+```text
+Runtime:       Node.js 24.x
+Architecture: x86_64 (the default is fine)
+Memory:       256 MB
+Timeout:      10 seconds
+VPC:          none
+Execution role:
+  AWSLambdaBasicExecutionRole plus access to only the required tables
+```
+
+The default execution role permits CloudWatch logging but does not give the
+function permission to read or write DynamoDB. Add a small inline IAM policy
+for the required table actions; do not use DynamoDB full access.
+
+Configure each function as follows:
+
+| Function | Environment variables | Required DynamoDB actions |
+| --- | --- | --- |
+| `CreateGuestSession` | `SESSIONS_TABLE_NAME` | `PutItem` on `Sessions` |
+| `CreateRoom` | `SESSIONS_TABLE_NAME`, `ROOMS_TABLE_NAME` | `GetItem` on `Sessions`; `PutItem` on `Rooms` |
+| `JoinRoom` | `SESSIONS_TABLE_NAME`, `ROOMS_TABLE_NAME` | `GetItem` on `Sessions`; `GetItem` and conditional `UpdateItem` on `Rooms` |
+| `GetRoom` | `SESSIONS_TABLE_NAME`, `ROOMS_TABLE_NAME` | `GetItem` on `Sessions` and `Rooms` |
+| `SubmitCommand` | `SESSIONS_TABLE_NAME`, `ROOMS_TABLE_NAME` | `GetItem` on both tables; conditional `UpdateItem` on `Rooms` |
+| `CreateSocketTicket` | `SESSIONS_TABLE_NAME` | `GetItem` and `PutItem` on `Sessions` |
+
+Use the exact deployed DynamoDB table names as the environment-variable
+values. No API Gateway URL or WebSocket callback URL is needed yet.
+
+Then implement and deploy these handlers:
+
+1. `CreateGuestSession` creates a guest token, stores only its hash in
+   `Sessions`, and returns the raw token to the browser.
+2. `CreateRoom` validates the guest session, creates a room in `Rooms`, adds
+   the host as the first player, and returns the room code.
+3. `JoinRoom` validates the guest session, adds the guest to an existing room,
+   and returns the updated sanitized room state.
+4. `GetRoom` validates the guest session and returns the latest sanitized room
+   state without exposing the deck order.
+5. `SubmitCommand` validates the player and room version, applies one game
+   action on the server, and conditionally saves the next room version.
+6. `CreateSocketTicket` validates the guest session and creates a short-lived,
+   one-use ticket for the WebSocket connection.
+
+Give each Lambda its required table names as environment variables and grant
+only the DynamoDB read/write actions it needs. Reuse one shared expiry-check
+function in every handler.
+
+Test these Lambdas directly before adding API Gateway. Use Lambda console test
+events or automated tests to confirm that two different guest sessions can
+create and join the same room.
+
+##### Step 3 — Create the HTTP API Gateway
+
+1. Create an API Gateway HTTP API.
+2. Integrate each route with its matching Lambda:
+
+   ```text
+   POST /sessions/guest
+   POST /rooms
+   POST /rooms/{roomId}/join
+   GET  /rooms/{roomId}
+   POST /rooms/{roomId}/commands
+   POST /rooms/{roomId}/socket-ticket
+   ```
+
+3. Create and deploy a `dev` stage.
+4. Enable CORS for `http://localhost:3000` during local development.
+5. Copy the deployed HTTP API URL.
+6. Call every route with an API client such as Postman or `curl`. Do not start
+   frontend work until create, join, get-room, and commands work through the
+   deployed API.
+
+##### Step 4 — Create the WebSocket API Gateway
+
+1. Create an API Gateway WebSocket API.
+2. Add a `$connect` Lambda that:
+   - receives the socket ticket;
+   - rejects an unknown, consumed, or expired ticket;
+   - stores `connectionId`, `roomId`, `playerId`, and `expiresAt` in
+     `Connections`.
+3. Add a `$disconnect` Lambda that deletes the connection item.
+4. Create and deploy a `dev` WebSocket stage.
+5. Copy both stage endpoints:
+
+   ```text
+   Browser connection URL: wss://{api-id}.execute-api.{region}.amazonaws.com/dev
+   Lambda callback URL:    https://{api-id}.execute-api.{region}.amazonaws.com/dev
+   ```
+
+6. Configure `BroadcastRoomUpdate` with:
+
+   ```text
+   CONNECTIONS_TABLE_NAME
+   CONNECTIONS_INDEX_NAME
+   WEBSOCKET_CALLBACK_URL
+   ```
+
+7. Grant it permission to query the index, delete stale connections, and call
+   `execute-api:ManageConnections`.
+8. Make `SubmitCommand` invoke the broadcast after it successfully saves a new
+   room version.
+9. Test with two raw WebSocket clients and confirm that a room update reaches
+   both connections.
+
+##### Step 5 — Implement the frontend room flow
+
+The current frontend is local pass-and-play only. Add:
+
+1. A landing screen with **Create room** and **Join room** choices.
+2. Guest-session creation and storage in the browser.
+3. A create-room form that displays the returned room code.
+4. A join-room form that accepts a room code and display name.
+5. An online game screen that renders the sanitized server state.
+6. Command requests that send `commandId` and `expectedVersion`.
+7. WebSocket connection, reconnect, and missed-version recovery using
+   `GET /rooms/{roomId}`.
+8. Local configuration containing the deployed HTTP and WebSocket URLs.
+
+Run the frontend at `http://localhost:3000` and verify that one normal browser
+window can create a room and one incognito window can join it. Only then run
+the full exit check.
+
+#### Phase 2 exit check
+
+1. Open two private/incognito browser windows.
+2. In window A, create a room and copy its room code.
+3. In window B, join using that room code.
+4. Start the game and confirm both windows show the same state.
+5. Take turns playing from both windows until the state changes several times.
+6. Close window B, then make another move in window A.
+7. Reopen window B and reconnect to the room.
+8. Confirm window B reloads the latest state from the server.
+9. Continue playing from both windows until the game finishes.
+10. Confirm both windows show the same winner and final scores.
 
 ### Phase 3 — Computer players
 
