@@ -14,7 +14,9 @@
     "test": "vitest run app packages services"
   },
   "dependencies": {
+    "@aws-sdk/client-apigatewaymanagementapi": "^3.1103.0",
     "@aws-sdk/client-dynamodb": "^3.1101.0",
+    "@aws-sdk/client-lambda": "^3.1103.0",
     "@aws-sdk/lib-dynamodb": "^3.1101.0",
     "nanoid": "^5.1.11",
     "next": "^16.2.11",
@@ -26,6 +28,7 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "esbuild": "^0.28.1",
     "eslint": "^9",
     "eslint-config-next": "^16.2.11",
     "tailwindcss": "^4",
