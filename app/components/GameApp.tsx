@@ -1,5 +1,6 @@
 "use client"
 
+import Image from "next/image"
 import {
   useCallback,
   useEffect,
@@ -15,6 +16,7 @@ import type {
 import { FLIP_SEVEN_BONUS, WINNING_SCORE } from "../../packages/game-engine"
 import { calculateRoundScore } from "../../packages/game-engine/rules"
 import cardBack from "../assets/cards/card_back.jpeg"
+import githubIcon from "../assets/github-logo.png"
 import {
   clearActiveRoom,
   guestSession,
@@ -103,7 +105,31 @@ function EntryFlow({
           <h1 className="display-title text-6xl font-black leading-[0.86] tracking-[-0.07em] text-white sm:text-8xl">
             FLIP <span className="inline-block rotate-3 text-amber-300">7</span>
           </h1>
-          <p className="mt-7 max-w-lg text-lg leading-8 text-slate-300">
+          <div className="mt-5">
+            <p className="text-sm font-bold tracking-wide text-slate-300">
+              by Jones Dollesin
+            </p>
+            <a
+              href="https://github.com/marketpanda/flip7"
+              target="_blank"
+              rel="noreferrer"
+              className="mt-2 inline-flex items-center gap-2 rounded-md text-sm font-semibold text-slate-400 transition-colors hover:text-amber-300"
+            >
+              <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-amber-300 p-0.5 shadow-[0_0_10px_rgba(252,211,77,0.3)]">
+                <Image
+                  src={githubIcon}
+                  alt=""
+                  width={21}
+                  height={21}
+                  className="h-6 w-6 rounded-full object-cover"
+                />
+              </span>
+              <span className="hover:underline">
+                github.com/marketpanda/flip7
+              </span>
+            </a>
+          </div>
+          <p className="mt-6 max-w-lg text-lg leading-8 text-slate-300">
             Create a private table, share the six-character room code, and play
             from your own device.
           </p>
