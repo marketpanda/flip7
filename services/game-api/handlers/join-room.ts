@@ -9,15 +9,34 @@ import {
   type HttpEvent,
 } from "../shared/http"
 import { serviceWithRooms } from "./dependencies"
+import {
+  invokeRoomBroadcaster,
+  noBroadcast,
+  type RoomBroadcaster,
+} from "./room-broadcaster"
 
-export function joinRoomHandler(service: GameService) {
+export function joinRoomHandler(
+  service: GameService,
+  broadcastRoomUpdate: RoomBroadcaster = noBroadcast,
+) {
   return async (event: HttpEvent) => {
     try {
-      return json(200, await service.joinRoom(
+      const roomId = roomIdParameter(event)
+      const room = await service.joinRoom(
         bearerToken(event),
-        roomIdParameter(event),
+        roomId,
         requiredDisplayName(parseJsonBody(event)),
-      ))
+      )
+
+      try {
+        await broadcastRoomUpdate(roomId, room)
+      } catch (error) {
+        // The player has already joined. A notification failure must not turn
+        // the successfully committed join into an HTTP failure.
+        console.error("Failed to broadcast room update", error)
+      }
+
+      return json(200, room)
     } catch (error) {
       return handleError(error)
     }
@@ -25,4 +44,7 @@ export function joinRoomHandler(service: GameService) {
 }
 
 export const handler = async (event: HttpEvent) =>
-  joinRoomHandler(serviceWithRooms())(event)
+  joinRoomHandler(
+    serviceWithRooms(),
+    invokeRoomBroadcaster,
+  )(event)

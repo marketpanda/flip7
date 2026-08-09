@@ -16700,7 +16700,7 @@ var init_package = __esm({
   "node_modules/@aws-sdk/nested-clients/package.json"() {
     package_default = {
       name: "@aws-sdk/nested-clients",
-      version: "3.997.39",
+      version: "3.997.41",
       description: "Nested clients for AWS SDK packages.",
       homepage: "https://github.com/aws/aws-sdk-js-v3/tree/main/packages/nested-clients",
       license: "Apache-2.0",
@@ -16800,7 +16800,7 @@ var init_package = __esm({
         "test:watch": "yarn g:vitest watch"
       },
       dependencies: {
-        "@aws-sdk/core": "^3.977.4",
+        "@aws-sdk/core": "^3.977.6",
         "@aws-sdk/signature-v4-multi-region": "^3.996.43",
         "@aws-sdk/types": "^3.974.2",
         "@smithy/core": "^3.31.1",
@@ -18451,30 +18451,53 @@ var init_UnionSerde = __esm({
   }
 });
 
+// node_modules/@aws-sdk/core/dist-es/submodules/protocols/json/detectBufferParsing.js
+function detectBufferParsing() {
+  if (canParseBuffer === void 0) {
+    try {
+      if (typeof Buffer !== "function") {
+        canParseBuffer = false;
+      } else {
+        const result = JSON.parse(Buffer.from([123, 125]));
+        canParseBuffer = result !== null && typeof result === "object";
+      }
+    } catch {
+      canParseBuffer = false;
+    }
+  }
+  return canParseBuffer;
+}
+var canParseBuffer;
+var init_detectBufferParsing = __esm({
+  "node_modules/@aws-sdk/core/dist-es/submodules/protocols/json/detectBufferParsing.js"() {
+  }
+});
+
 // node_modules/@aws-sdk/core/dist-es/submodules/protocols/json/jsonReviver.js
 function jsonReviver(key, value, context) {
   if (context?.source) {
     const numericString = context.source;
     if (typeof value === "number") {
       const inSafeRange = value <= Number.MAX_SAFE_INTEGER && value >= Number.MIN_SAFE_INTEGER;
-      if (!inSafeRange || numericString !== String(value)) {
-        if (inSafeRange && /[eE]/.test(numericString) && String(Number(numericString)) === String(value)) {
+      if (inSafeRange) {
+        if (isRepresentable(numericString, value)) {
           return value;
         }
-        if (isFractionalNumeric(numericString)) {
+        return new NumericValue(numericString, "bigDecimal");
+      } else {
+        if (isFractionalBigNumeric(numericString)) {
           return new NumericValue(numericString, "bigDecimal");
-        } else {
-          if (/[eE]/.test(numericString)) {
-            return BigInt(Number(numericString));
-          }
-          return BigInt(numericString);
         }
+        if (/[eE]/.test(numericString)) {
+          return expandExponentToBigInt(numericString);
+        }
+        return BigInt(numericString);
       }
     }
   }
   return value;
 }
-function isFractionalNumeric(s2) {
+function isFractionalBigNumeric(s2) {
   const dotIndex = s2.indexOf(".");
   if (dotIndex === -1) {
     return false;
@@ -18486,6 +18509,83 @@ function isFractionalNumeric(s2) {
   const fracDigits = eIndex - dotIndex - 1;
   const exp = parseInt(s2.slice(eIndex + 1), 10);
   return exp < fracDigits;
+}
+function isRepresentable(numericString, value) {
+  if (numericString === String(value)) {
+    return true;
+  }
+  if (Object.is(value, -0)) {
+    return true;
+  }
+  if (/[eE]/.test(numericString)) {
+    return expandToDecimal(numericString) === expandToDecimal(String(value));
+  }
+  const normalized = numericString.replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
+  const canonical = String(value);
+  if (normalized === canonical) {
+    return true;
+  }
+  if (/[eE]/.test(canonical)) {
+    return normalized === expandToDecimal(canonical);
+  }
+  return false;
+}
+function expandToDecimal(s2) {
+  const negative = s2.startsWith("-");
+  const abs = negative ? s2.slice(1) : s2;
+  const eIndex = abs.search(/[eE]/);
+  let result;
+  if (eIndex === -1) {
+    result = abs;
+  } else {
+    const exp = parseInt(abs.slice(eIndex + 1), 10);
+    const mantissa = abs.slice(0, eIndex);
+    const dotIndex = mantissa.indexOf(".");
+    let digits;
+    let intLen;
+    if (dotIndex === -1) {
+      digits = mantissa;
+      intLen = mantissa.length;
+    } else {
+      digits = mantissa.slice(0, dotIndex) + mantissa.slice(dotIndex + 1);
+      intLen = dotIndex;
+    }
+    digits = digits.replace(/0+$/, "") || "0";
+    const newDotPos = intLen + exp;
+    if (digits === "0") {
+      result = "0";
+    } else if (newDotPos <= 0) {
+      result = "0." + "0".repeat(-newDotPos) + digits;
+    } else if (newDotPos >= digits.length) {
+      result = digits + "0".repeat(newDotPos - digits.length);
+    } else {
+      result = digits.slice(0, newDotPos) + "." + digits.slice(newDotPos);
+    }
+  }
+  if (result.includes(".")) {
+    result = result.replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
+  }
+  return (negative ? "-" : "") + result;
+}
+function expandExponentToBigInt(s2) {
+  const eIndex = s2.search(/[eE]/);
+  const exp = parseInt(s2.slice(eIndex + 1), 10);
+  const negative = s2.startsWith("-");
+  const mantissa = s2.slice(negative ? 1 : 0, eIndex);
+  const dotIndex = mantissa.indexOf(".");
+  let digits;
+  let shift;
+  if (dotIndex === -1) {
+    digits = mantissa;
+    shift = exp;
+  } else {
+    digits = mantissa.slice(0, dotIndex) + mantissa.slice(dotIndex + 1);
+    const fracDigits = mantissa.length - dotIndex - 1;
+    shift = exp - fracDigits;
+  }
+  digits = digits.replace(/0+$/, "") || "0";
+  const result = BigInt(digits) * 10n ** BigInt(shift + (mantissa.replace(".", "").length - digits.length));
+  return negative ? -result : result;
 }
 var init_jsonReviver = __esm({
   "node_modules/@aws-sdk/core/dist-es/submodules/protocols/json/jsonReviver.js"() {
@@ -18546,28 +18646,6 @@ var init_common = __esm({
     init_protocols();
     init_serde();
     collectBodyString = (streamBody, context) => collectBody(streamBody, context).then((body) => (context?.utf8Encoder ?? toUtf8)(body));
-  }
-});
-
-// node_modules/@aws-sdk/core/dist-es/submodules/protocols/json/detectBufferParsing.js
-function detectBufferParsing() {
-  if (canParseBuffer === void 0) {
-    try {
-      if (typeof Buffer !== "function") {
-        canParseBuffer = false;
-      } else {
-        const result = JSON.parse(Buffer.from([123, 125]));
-        canParseBuffer = result !== null && typeof result === "object";
-      }
-    } catch {
-      canParseBuffer = false;
-    }
-  }
-  return canParseBuffer;
-}
-var canParseBuffer;
-var init_detectBufferParsing = __esm({
-  "node_modules/@aws-sdk/core/dist-es/submodules/protocols/json/detectBufferParsing.js"() {
   }
 });
 
@@ -18671,6 +18749,1087 @@ function writeKey(obj) {
 }
 var init_writeKey = __esm({
   "node_modules/@aws-sdk/core/dist-es/submodules/protocols/writeKey.js"() {
+  }
+});
+
+// node_modules/@aws-sdk/core/dist-es/submodules/protocols/json/codec-v2/JsonShapeDeserializer2.js
+var JsonShapeDeserializer2;
+var init_JsonShapeDeserializer2 = __esm({
+  "node_modules/@aws-sdk/core/dist-es/submodules/protocols/json/codec-v2/JsonShapeDeserializer2.js"() {
+    init_protocols();
+    init_schema();
+    init_serde();
+    init_ConfigurableSerdeContext();
+    init_UnionSerde();
+    init_detectBufferParsing();
+    init_jsonReviver();
+    init_needsReviver();
+    init_parseJsonBody();
+    init_writeKey();
+    JsonShapeDeserializer2 = class extends SerdeContextConfig {
+      settings;
+      constructor(settings) {
+        super();
+        this.settings = settings;
+      }
+      async read(schema, data) {
+        const reviver = needsReviver(schema) ? jsonReviver : void 0;
+        let parsed;
+        if (typeof data === "string") {
+          if (data.length === 0) {
+            return {};
+          }
+          parsed = JSON.parse(data, reviver);
+        } else if (data instanceof Uint8Array && detectBufferParsing()) {
+          if (data.byteLength === 0) {
+            return {};
+          }
+          const buf2 = Buffer.isBuffer(data) ? data : Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+          parsed = JSON.parse(buf2, reviver);
+        } else {
+          parsed = await parseJsonBody2(data, this.serdeContext, schema);
+        }
+        return this._read(schema, parsed);
+      }
+      readObject(schema, data) {
+        return this._read(schema, data);
+      }
+      _read(schema, value) {
+        const isObject = value !== null && typeof value === "object";
+        const ns = NormalizedSchema.of(schema);
+        if (isObject) {
+          if (ns.isStructSchema()) {
+            return this._readStruct(ns, value);
+          }
+          if (Array.isArray(value) && ns.isListSchema()) {
+            const listMember = ns.getValueSchema();
+            if (this.needsTransform(listMember)) {
+              for (let i5 = 0; i5 < value.length; ++i5) {
+                value[i5] = this._read(listMember, value[i5]);
+              }
+            }
+            return value;
+          }
+          if (ns.isMapSchema()) {
+            const mapMember = ns.getValueSchema();
+            const map3 = value;
+            if (this.needsTransform(mapMember)) {
+              for (const k5 in map3) {
+                if (k5 === "__proto__") {
+                  writeKey(map3);
+                }
+                map3[k5] = this._read(mapMember, map3[k5]);
+              }
+            }
+            return map3;
+          }
+        }
+        if (ns.isBlobSchema() && typeof value === "string") {
+          return fromBase64(value);
+        }
+        const mediaType = ns.getMergedTraits().mediaType;
+        if (ns.isStringSchema() && typeof value === "string" && mediaType) {
+          const isJson = mediaType === "application/json" || mediaType.endsWith("+json");
+          if (isJson) {
+            return LazyJsonString.from(value);
+          }
+          return value;
+        }
+        if (ns.isTimestampSchema() && value != null) {
+          const format2 = determineTimestampFormat(ns, this.settings);
+          switch (format2) {
+            case 5:
+              return parseRfc3339DateTimeWithOffset(value);
+            case 6:
+              return parseRfc7231DateTime(value);
+            case 7:
+              return parseEpochTimestamp(value);
+            default:
+              console.warn("Missing timestamp format, parsing value with Date constructor:", value);
+              return new Date(value);
+          }
+        }
+        if (ns.isBigIntegerSchema() && (typeof value === "number" || typeof value === "string")) {
+          return BigInt(value);
+        }
+        if (ns.isBigDecimalSchema() && value != void 0) {
+          if (value instanceof NumericValue) {
+            return value;
+          }
+          const untyped = value;
+          if (untyped.type === "bigDecimal" && "string" in untyped) {
+            return new NumericValue(untyped.string, untyped.type);
+          }
+          return new NumericValue(String(value), "bigDecimal");
+        }
+        if (ns.isNumericSchema() && typeof value === "string") {
+          switch (value) {
+            case "Infinity":
+              return Infinity;
+            case "-Infinity":
+              return -Infinity;
+            case "NaN":
+              return NaN;
+          }
+          return value;
+        }
+        if (ns.isDocumentSchema()) {
+          if (isObject) {
+            if (Array.isArray(value)) {
+              for (let i5 = 0; i5 < value.length; ++i5) {
+                const v = value[i5];
+                if (!(v instanceof NumericValue)) {
+                  value[i5] = this._read(ns, v);
+                }
+              }
+            } else {
+              const doc = value;
+              for (const k5 in doc) {
+                if (k5 === "__proto__") {
+                  writeKey(doc);
+                }
+                const v = doc[k5];
+                if (!(v instanceof NumericValue)) {
+                  doc[k5] = this._read(ns, v);
+                }
+              }
+            }
+          }
+        }
+        return value;
+      }
+      _readStruct(ns, record) {
+        const union = ns.isUnionSchema();
+        const out = {};
+        let nameMap;
+        const hasType = typeof record.__type === "string";
+        const { jsonName } = this.settings;
+        if (jsonName && hasType) {
+          nameMap = {};
+        }
+        let unionSerde;
+        if (union) {
+          unionSerde = new UnionSerde(record, out);
+        }
+        for (const [memberName, memberSchema] of ns.structIterator()) {
+          let fromKey = memberName;
+          if (jsonName) {
+            fromKey = memberSchema.getMergedTraits().jsonName ?? fromKey;
+            if (hasType) {
+              nameMap[fromKey] = memberName;
+            }
+          }
+          if (union) {
+            unionSerde.mark(fromKey);
+          }
+          if (record[fromKey] != null) {
+            out[memberName] = this._read(memberSchema, record[fromKey]);
+          }
+        }
+        if (union) {
+          unionSerde.writeUnknown();
+        } else if (hasType) {
+          for (const k5 in record) {
+            const v = record[k5];
+            const t = jsonName ? nameMap[k5] ?? k5 : k5;
+            if (!(t in out)) {
+              out[t] = v;
+            }
+          }
+        }
+        return out;
+      }
+      needsTransform(ns) {
+        if (ns.isBlobSchema() || ns.isTimestampSchema() || ns.isBigIntegerSchema() || ns.isBigDecimalSchema()) {
+          return true;
+        }
+        if (ns.isDocumentSchema() || ns.isStructSchema() || ns.isListSchema() || ns.isMapSchema()) {
+          return true;
+        }
+        if (ns.isStringSchema() && ns.getMergedTraits().mediaType) {
+          return true;
+        }
+        return false;
+      }
+    };
+  }
+});
+
+// node_modules/@aws-sdk/core/dist-es/submodules/protocols/json/codec-v2/JsonBytesStringAdapter.js
+var JsonBytesStringAdapter, warned;
+var init_JsonBytesStringAdapter = __esm({
+  "node_modules/@aws-sdk/core/dist-es/submodules/protocols/json/codec-v2/JsonBytesStringAdapter.js"() {
+    init_serde();
+    JsonBytesStringAdapter = class _JsonBytesStringAdapter extends Uint8Array {
+      string = null;
+      static allocUnsafe(bytes) {
+        if (typeof Buffer === "function") {
+          const buffer = Buffer.allocUnsafe(bytes);
+          return new _JsonBytesStringAdapter(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+        }
+        return new _JsonBytesStringAdapter(bytes);
+      }
+      toString() {
+        return this.s();
+      }
+      valueOf() {
+        return this.s();
+      }
+      includes(searchString, position) {
+        if (typeof searchString === "string") {
+          return this.s().includes(searchString, position);
+        }
+        return Uint8Array.prototype.includes.call(this, searchString, position);
+      }
+      indexOf(searchString, position) {
+        if (typeof searchString === "string") {
+          return this.s().indexOf(searchString, position);
+        }
+        return Uint8Array.prototype.indexOf.call(this, searchString, position);
+      }
+      lastIndexOf(searchString, position) {
+        if (typeof searchString === "string") {
+          return this.s().lastIndexOf(searchString, position);
+        }
+        const fn = Uint8Array.prototype.lastIndexOf;
+        if (position !== void 0) {
+          return fn.call(this, searchString, position);
+        }
+        return fn.call(this, searchString);
+      }
+      startsWith(searchString, position) {
+        return this.s().startsWith(searchString, position);
+      }
+      endsWith(searchString, endPosition) {
+        return this.s().endsWith(searchString, endPosition);
+      }
+      match(regexp) {
+        return this.s().match(regexp);
+      }
+      replace(searchValue, replaceValue) {
+        return this.s().replace(searchValue, replaceValue);
+      }
+      search(regexp) {
+        return this.s().search(regexp);
+      }
+      split(separator, limit) {
+        return this.s().split(separator, limit);
+      }
+      substring(start, end2) {
+        return this.s().substring(start, end2);
+      }
+      trim() {
+        return this.s().trim();
+      }
+      trimStart() {
+        return this.s().trimStart();
+      }
+      trimEnd() {
+        return this.s().trimEnd();
+      }
+      charAt(pos2) {
+        return this.s().charAt(pos2);
+      }
+      charCodeAt(index) {
+        return this.s().charCodeAt(index);
+      }
+      padStart(maxLength, fillString) {
+        return this.s().padStart(maxLength, fillString);
+      }
+      padEnd(maxLength, fillString) {
+        return this.s().padEnd(maxLength, fillString);
+      }
+      repeat(count) {
+        return this.s().repeat(count);
+      }
+      toUpperCase() {
+        return this.s().toUpperCase();
+      }
+      toLowerCase() {
+        return this.s().toLowerCase();
+      }
+      s() {
+        if (this.string == null) {
+          const n3 = Date.now();
+          if (n3 > warned + 6e4) {
+            console.warn("@aws-sdk/core/protocols - WARN - JsonCodec2: you have called a string method on a Uint8Array request body. It has been automatically converted to string. In a future version this will throw an error.");
+            warned = n3;
+          }
+          this.string = toUtf8(this);
+        }
+        return this.string;
+      }
+    };
+    warned = 0;
+  }
+});
+
+// node_modules/@aws-sdk/core/dist-es/submodules/protocols/json/codec-v2/JsonShapeSerializer2.js
+function alloc(size) {
+  return JsonBytesStringAdapter.allocUnsafe(size);
+}
+var encoder, OPEN_BRACE, CLOSE_BRACE, OPEN_BRACKET, CLOSE_BRACKET, QUOTE, COLON, COMMA, BACKSLASH, TRUE, FALSE, NULL, ESCAPE_TABLE, INITIAL_BUFFER_SIZE2, JsonShapeSerializer2;
+var init_JsonShapeSerializer2 = __esm({
+  "node_modules/@aws-sdk/core/dist-es/submodules/protocols/json/codec-v2/JsonShapeSerializer2.js"() {
+    init_protocols();
+    init_schema();
+    init_serde();
+    init_ConfigurableSerdeContext();
+    init_JsonBytesStringAdapter();
+    encoder = new TextEncoder();
+    OPEN_BRACE = 123;
+    CLOSE_BRACE = 125;
+    OPEN_BRACKET = 91;
+    CLOSE_BRACKET = 93;
+    QUOTE = 34;
+    COLON = 58;
+    COMMA = 44;
+    BACKSLASH = 92;
+    TRUE = new Uint8Array([116, 114, 117, 101]);
+    FALSE = new Uint8Array([102, 97, 108, 115, 101]);
+    NULL = new Uint8Array([110, 117, 108, 108]);
+    ESCAPE_TABLE = new Array(128).fill(null);
+    ESCAPE_TABLE[8] = "b";
+    ESCAPE_TABLE[9] = "t";
+    ESCAPE_TABLE[10] = "n";
+    ESCAPE_TABLE[12] = "f";
+    ESCAPE_TABLE[13] = "r";
+    ESCAPE_TABLE[34] = '"';
+    ESCAPE_TABLE[92] = "\\";
+    for (let i5 = 0; i5 < 32; i5++) {
+      if (ESCAPE_TABLE[i5] === null) {
+        ESCAPE_TABLE[i5] = "u00" + i5.toString(16).padStart(2, "0");
+      }
+    }
+    INITIAL_BUFFER_SIZE2 = 2048;
+    JsonShapeSerializer2 = class _JsonShapeSerializer2 extends SerdeContextConfig {
+      settings;
+      json;
+      i = 0;
+      rootSchema;
+      rawValue;
+      passthrough = false;
+      constructor(settings) {
+        super();
+        this.settings = settings;
+        this.json = alloc(INITIAL_BUFFER_SIZE2);
+      }
+      write(schema, value) {
+        this.i = 0;
+        this.rawValue = value;
+        this.rootSchema = NormalizedSchema.of(schema);
+        this.passthrough = this.rootSchema.isBlobSchema() || this.rootSchema.isStringSchema();
+        if (!this.passthrough) {
+          this.writeValue(this.rootSchema, value, void 0);
+        }
+      }
+      writeDiscriminatedDocument(schema, value) {
+        this.i = 0;
+        this.rootSchema = NormalizedSchema.of(schema);
+        const ns = this.rootSchema;
+        if (ns.isStructSchema() && value != null && typeof value === "object") {
+          this.writeValue(ns, value, void 0);
+          const prefix = `"__type":"${ns.getName(true) ?? "Unknown"}",`;
+          const z = prefix.length;
+          this.ensure(z);
+          this.json.copyWithin(1 + z, 1, this.i);
+          encoder.encodeInto(prefix, this.json.subarray(1));
+          this.i += z;
+        } else {
+          this.writeValue(ns, value, void 0);
+        }
+      }
+      flush() {
+        this.rootSchema = void 0;
+        const finalPosition = this.i;
+        this.i = 0;
+        const raw = this.rawValue;
+        this.rawValue = void 0;
+        if (finalPosition === 0) {
+          return raw;
+        }
+        const result = this.json.subarray(0, finalPosition);
+        this.json = alloc(INITIAL_BUFFER_SIZE2);
+        return result;
+      }
+      ensure(byteCount) {
+        const { i: i5, json: json2 } = this;
+        if (i5 + byteCount > json2.length) {
+          let newSize = json2.length * 2;
+          while (newSize < i5 + byteCount) {
+            newSize *= 2;
+          }
+          const next = alloc(newSize);
+          next.set(this.json);
+          this.json = next;
+        }
+      }
+      writeAscii(s2) {
+        const z = s2.length;
+        this.ensure(z);
+        let { i: i5, json: json2 } = this;
+        for (let j5 = 0; j5 < z; ++j5) {
+          json2[i5] = s2.charCodeAt(j5);
+          i5 += 1;
+        }
+        this.i = i5;
+      }
+      writeAsciiQuoted(s2) {
+        const z = s2.length;
+        this.ensure(z + 4);
+        let { json: json2, i: i5 } = this;
+        json2[i5++] = QUOTE;
+        for (let j5 = 0; j5 < z; ++j5) {
+          json2[i5++] = s2.charCodeAt(j5);
+        }
+        json2[i5++] = QUOTE;
+        this.i = i5;
+      }
+      writeJsonString(s2) {
+        this.ensure(s2.length * 3 + 2);
+        this.json[this.i++] = QUOTE;
+        const z = s2.length;
+        for (let j5 = 0; j5 < z; ++j5) {
+          const c5 = s2.charCodeAt(j5);
+          if (c5 > 34 && c5 < 92) {
+            this.json[this.i++] = c5;
+          } else if (c5 < 128) {
+            const esc = ESCAPE_TABLE[c5];
+            if (esc !== null) {
+              this.ensure(esc.length + 1);
+              this.json[this.i++] = BACKSLASH;
+              for (let k5 = 0; k5 < esc.length; k5++) {
+                this.json[this.i++] = esc.charCodeAt(k5);
+              }
+            } else {
+              this.json[this.i++] = c5;
+            }
+          } else if (c5 >= 55296 && c5 <= 56319) {
+            const next = j5 + 1 < z ? s2.charCodeAt(j5 + 1) : 0;
+            if (next >= 56320 && next <= 57343) {
+              this.ensure(4);
+              const { written } = encoder.encodeInto(s2.substring(j5, j5 + 2), this.json.subarray(this.i));
+              this.i += written;
+              ++j5;
+            } else {
+              this.ensure(6);
+              this.writeUnicodeEscape(c5);
+            }
+          } else if (c5 >= 56320 && c5 <= 57343) {
+            this.ensure(6);
+            this.writeUnicodeEscape(c5);
+          } else {
+            let { i: i5, json: json2 } = this;
+            if (c5 < 2048) {
+              json2[i5++] = 192 | c5 >> 6;
+              json2[i5++] = 128 | c5 & 63;
+            } else {
+              json2[i5++] = 224 | c5 >> 12;
+              json2[i5++] = 128 | c5 >> 6 & 63;
+              json2[i5++] = 128 | c5 & 63;
+            }
+            this.i = i5;
+          }
+        }
+        this.json[this.i++] = QUOTE;
+      }
+      writeUnicodeEscape(code) {
+        let { json: json2, i: i5 } = this;
+        json2[i5++] = BACKSLASH;
+        json2[i5++] = 117;
+        const hex = code.toString(16).padStart(4, "0");
+        for (let j5 = 0; j5 < 4; ++j5) {
+          json2[i5++] = hex.charCodeAt(j5);
+        }
+        this.i = i5;
+      }
+      static B64 = (() => {
+        const chars2 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        const table = new Uint8Array(64);
+        for (let i5 = 0; i5 < 64; ++i5) {
+          table[i5] = chars2.charCodeAt(i5);
+        }
+        return table;
+      })();
+      writeBase64(data) {
+        const b64Len = Math.ceil(data.length / 3) * 4;
+        this.ensure(b64Len + 2);
+        const json2 = this.json;
+        const B64 = _JsonShapeSerializer2.B64;
+        let i5 = this.i;
+        json2[i5++] = QUOTE;
+        const len = data.length;
+        const remainder = len % 3;
+        const mainLen = len - remainder;
+        for (let j5 = 0; j5 < mainLen; j5 += 3) {
+          const a5 = data[j5];
+          const b5 = data[j5 + 1];
+          const c5 = data[j5 + 2];
+          json2[i5++] = B64[a5 >> 2];
+          json2[i5++] = B64[(a5 & 3) << 4 | b5 >> 4];
+          json2[i5++] = B64[(b5 & 15) << 2 | c5 >> 6];
+          json2[i5++] = B64[c5 & 63];
+        }
+        if (remainder === 2) {
+          const a5 = data[mainLen];
+          const b5 = data[mainLen + 1];
+          json2[i5++] = B64[a5 >> 2];
+          json2[i5++] = B64[(a5 & 3) << 4 | b5 >> 4];
+          json2[i5++] = B64[(b5 & 15) << 2];
+          json2[i5++] = 61;
+        } else if (remainder === 1) {
+          const a5 = data[mainLen];
+          json2[i5++] = B64[a5 >> 2];
+          json2[i5++] = B64[(a5 & 3) << 4];
+          json2[i5++] = 61;
+          json2[i5++] = 61;
+        }
+        json2[i5++] = QUOTE;
+        this.i = i5;
+      }
+      writeValue(schema, value, container) {
+        if (value == null) {
+          if (container?.isStructSchema()) {
+            if (value === void 0) {
+              const ns2 = NormalizedSchema.of(schema);
+              if (ns2.isIdempotencyToken()) {
+                this.writeAsciiQuoted(generateIdempotencyToken());
+                return;
+              }
+            }
+            return;
+          }
+          this.ensure(4);
+          this.json.set(NULL, this.i);
+          this.i += 4;
+          return;
+        }
+        const ns = NormalizedSchema.of(schema);
+        const isObject = typeof value === "object";
+        if (ns.isStringSchema()) {
+          const mediaType = ns.getMergedTraits().mediaType;
+          if (mediaType) {
+            const isJson = mediaType === "application/json" || mediaType.endsWith("+json");
+            if (isJson) {
+              this.writeJsonString(LazyJsonString.from(value).toString());
+              return;
+            }
+          }
+        }
+        if (isObject) {
+          if (ns.isStructSchema()) {
+            this.writeStruct(ns, value);
+            return;
+          }
+          if (Array.isArray(value) && (ns.isListSchema() || ns.isDocumentSchema())) {
+            this.writeList(ns, value, ns.isDocumentSchema());
+            return;
+          }
+          if (ns.isMapSchema()) {
+            this.writeMap(ns, value, false);
+            return;
+          }
+          if (value instanceof Uint8Array && (ns.isBlobSchema() || ns.isDocumentSchema())) {
+            this.writeBase64(value);
+            return;
+          }
+          if (value instanceof Date && (ns.isTimestampSchema() || ns.isDocumentSchema())) {
+            this.writeTimestamp(ns, value);
+            return;
+          }
+          if (value instanceof NumericValue) {
+            this.writeAscii(value.string);
+            return;
+          }
+          if (ns.isDocumentSchema()) {
+            if (Array.isArray(value)) {
+              this.writeList(ns, value, true);
+            } else {
+              this.writeMap(ns, value, true);
+            }
+            return;
+          }
+          const json2 = JSON.stringify(value);
+          this.writeAscii(json2);
+          return;
+        }
+        if (typeof value === "string") {
+          if (ns.isBlobSchema()) {
+            const b64 = (this.serdeContext?.base64Encoder ?? toBase64)(value);
+            this.writeAsciiQuoted(b64);
+            return;
+          }
+          this.writeJsonString(value);
+          return;
+        }
+        if (typeof value === "number") {
+          if (Math.abs(value) === Infinity || Number.isNaN(value)) {
+            this.writeAsciiQuoted(String(value));
+            return;
+          }
+          const numStr = String(value);
+          this.writeAscii(numStr);
+          return;
+        }
+        if (typeof value === "boolean") {
+          this.ensure(5);
+          let { i: i5, json: json2 } = this;
+          if (value) {
+            json2.set(TRUE, i5);
+            i5 += 4;
+          } else {
+            json2.set(FALSE, i5);
+            i5 += 5;
+          }
+          this.i = i5;
+          return;
+        }
+        if (typeof value === "bigint") {
+          this.writeAscii(value.toString());
+          return;
+        }
+        this.writeAscii(String(value));
+      }
+      writeStruct(ns, value) {
+        this.ensure(2);
+        this.json[this.i++] = OPEN_BRACE;
+        let wroteAny = false;
+        const hasType = typeof value.__type === "string";
+        let writtenKeys;
+        if (hasType) {
+          writtenKeys = /* @__PURE__ */ new Set();
+        }
+        for (const [memberName, memberSchema] of ns.structIterator()) {
+          const item = value[memberName];
+          if (item == null && !memberSchema.isIdempotencyToken()) {
+            continue;
+          }
+          if (wroteAny) {
+            this.ensure(1);
+            this.json[this.i++] = COMMA;
+          }
+          wroteAny = true;
+          const targetKey = this.settings.jsonName ? memberSchema.getMergedTraits().jsonName ?? memberName : memberName;
+          if (writtenKeys) {
+            writtenKeys.add(memberName);
+            writtenKeys.add(targetKey);
+          }
+          this.writeAsciiQuoted(targetKey);
+          this.json[this.i++] = COLON;
+          this.writeValue(memberSchema, item, ns);
+        }
+        if (!wroteAny && ns.isUnionSchema()) {
+          const { $unknown } = value;
+          if (Array.isArray($unknown)) {
+            const [k5, v] = $unknown;
+            this.writeAsciiQuoted(k5);
+            this.ensure(1);
+            this.json[this.i++] = COLON;
+            this.writeValue(15, v, ns);
+          }
+        } else if (hasType) {
+          for (const k5 in value) {
+            if (writtenKeys.has(k5)) {
+              continue;
+            }
+            writtenKeys.add(k5);
+            const v = value[k5];
+            if (wroteAny) {
+              this.ensure(1);
+              this.json[this.i++] = COMMA;
+            }
+            wroteAny = true;
+            this.writeAsciiQuoted(k5);
+            this.ensure(1);
+            this.json[this.i++] = COLON;
+            this.writeValue(15, v, void 0);
+          }
+        }
+        this.ensure(1);
+        this.json[this.i++] = CLOSE_BRACE;
+      }
+      writeList(ns, value, isDocument) {
+        const sparse = !!ns.getMergedTraits().sparse;
+        const valueSchema = ns.getValueSchema();
+        if (!isDocument) {
+          if (valueSchema.isStringSchema() || valueSchema.isNumericSchema() || valueSchema.isBooleanSchema()) {
+            let hasSpecials = false;
+            for (let i5 = 0; i5 < value.length; ++i5) {
+              const v = value[i5];
+              if (Number.isNaN(v) || v === Infinity || v === -Infinity || v == null && !sparse) {
+                hasSpecials = true;
+                break;
+              }
+            }
+            let json2;
+            if (!hasSpecials) {
+              json2 = JSON.stringify(value);
+            } else {
+              const out = [];
+              for (let i5 = 0; i5 < value.length; ++i5) {
+                const v = value[i5];
+                if (v == null && !sparse)
+                  continue;
+                if (Number.isNaN(v) || v === Infinity || v === -Infinity) {
+                  out.push(String(v));
+                } else {
+                  out.push(v);
+                }
+              }
+              json2 = JSON.stringify(out);
+            }
+            this.ensure(json2.length * 3);
+            this.i += encoder.encodeInto(json2, this.json.subarray(this.i)).written;
+            return;
+          }
+        }
+        this.ensure(2);
+        this.json[this.i++] = OPEN_BRACKET;
+        let wroteFirstItem = false;
+        for (let i5 = 0; i5 < value.length; ++i5) {
+          const item = value[i5];
+          if (isDocument ? item === void 0 : item == null && !sparse) {
+            continue;
+          }
+          if (wroteFirstItem) {
+            this.ensure(1);
+            this.json[this.i++] = COMMA;
+          }
+          this.writeValue(valueSchema, item, void 0);
+          wroteFirstItem = true;
+        }
+        this.ensure(1);
+        this.json[this.i++] = CLOSE_BRACKET;
+      }
+      writeMap(ns, value, isDocument) {
+        const sparse = !!ns.getMergedTraits().sparse;
+        const valueSchema = ns.getValueSchema();
+        if (!isDocument) {
+          if (valueSchema.isStringSchema() || valueSchema.isNumericSchema() || valueSchema.isBooleanSchema()) {
+            let modifications;
+            for (const k5 in value) {
+              const v = value[k5];
+              if (Number.isNaN(v) || v === Infinity || v === -Infinity) {
+                (modifications ??= {})[k5] = v;
+                value[k5] = String(v);
+              } else if (v === null && !sparse) {
+                (modifications ??= {})[k5] = null;
+                value[k5] = void 0;
+              }
+            }
+            const json2 = JSON.stringify(value);
+            if (modifications) {
+              Object.assign(value, modifications);
+            }
+            this.ensure(json2.length * 3);
+            this.i += encoder.encodeInto(json2, this.json.subarray(this.i)).written;
+            return;
+          }
+        }
+        this.ensure(2);
+        this.json[this.i++] = OPEN_BRACE;
+        let first = true;
+        for (const k5 in value) {
+          const v = value[k5];
+          if (isDocument ? v === void 0 : v == null && !sparse) {
+            continue;
+          }
+          if (!first) {
+            this.ensure(1);
+            this.json[this.i++] = COMMA;
+          }
+          first = false;
+          this.writeJsonString(k5);
+          this.ensure(1);
+          this.json[this.i++] = COLON;
+          this.writeValue(valueSchema, v, void 0);
+        }
+        this.ensure(1);
+        this.json[this.i++] = CLOSE_BRACE;
+      }
+      writeTimestamp(ns, value) {
+        const format2 = determineTimestampFormat(ns, this.settings);
+        switch (format2) {
+          case 5: {
+            const iso = value.toISOString().replace(".000Z", "Z");
+            this.writeAsciiQuoted(iso);
+            return;
+          }
+          case 6: {
+            this.writeAsciiQuoted(dateToUtcString(value));
+            return;
+          }
+          case 7: {
+            const epochSecs = String(value.getTime() / 1e3);
+            this.writeAscii(epochSecs);
+            return;
+          }
+          default: {
+            const epochSecs = String(value.getTime() / 1e3);
+            this.writeAscii(epochSecs);
+            return;
+          }
+        }
+      }
+    };
+  }
+});
+
+// node_modules/@aws-sdk/core/dist-es/submodules/protocols/json/codec-v2/JsonCodec2.js
+var JsonCodec2;
+var init_JsonCodec2 = __esm({
+  "node_modules/@aws-sdk/core/dist-es/submodules/protocols/json/codec-v2/JsonCodec2.js"() {
+    init_ConfigurableSerdeContext();
+    init_JsonShapeDeserializer2();
+    init_JsonShapeSerializer2();
+    JsonCodec2 = class extends SerdeContextConfig {
+      settings;
+      constructor(settings) {
+        super();
+        this.settings = settings;
+      }
+      createSerializer() {
+        const serializer = new JsonShapeSerializer2(this.settings);
+        serializer.setSerdeContext(this.serdeContext);
+        return serializer;
+      }
+      createDeserializer() {
+        const deserializer = new JsonShapeDeserializer2(this.settings);
+        deserializer.setSerdeContext(this.serdeContext);
+        return deserializer;
+      }
+    };
+  }
+});
+
+// node_modules/@aws-sdk/core/dist-es/submodules/protocols/json/AwsJsonRpcProtocol.js
+var AwsJsonRpcProtocol;
+var init_AwsJsonRpcProtocol = __esm({
+  "node_modules/@aws-sdk/core/dist-es/submodules/protocols/json/AwsJsonRpcProtocol.js"() {
+    init_protocols();
+    init_schema();
+    init_ProtocolLib();
+    init_JsonCodec2();
+    init_parseJsonBody();
+    AwsJsonRpcProtocol = class extends RpcProtocol {
+      serializer;
+      deserializer;
+      serviceTarget;
+      codec;
+      mixin;
+      awsQueryCompatible;
+      constructor({ defaultNamespace, errorTypeRegistries: errorTypeRegistries5, serviceTarget, awsQueryCompatible, jsonCodec }) {
+        super({
+          defaultNamespace,
+          errorTypeRegistries: errorTypeRegistries5
+        });
+        this.serviceTarget = serviceTarget;
+        this.codec = jsonCodec ?? new JsonCodec2({
+          timestampFormat: {
+            useTrait: true,
+            default: 7
+          },
+          jsonName: false
+        });
+        this.serializer = this.codec.createSerializer();
+        this.deserializer = this.codec.createDeserializer();
+        this.awsQueryCompatible = !!awsQueryCompatible;
+        this.mixin = new ProtocolLib(this.awsQueryCompatible);
+      }
+      async serializeRequest(operationSchema, input, context) {
+        const request = await super.serializeRequest(operationSchema, input, context);
+        if (!request.path.endsWith("/")) {
+          request.path += "/";
+        }
+        request.headers["content-type"] = `application/x-amz-json-${this.getJsonRpcVersion()}`;
+        request.headers["x-amz-target"] = `${this.serviceTarget}.${operationSchema.name}`;
+        if (this.awsQueryCompatible) {
+          request.headers["x-amzn-query-mode"] = "true";
+        }
+        if (deref(operationSchema.input) === "unit" || !request.body) {
+          request.body = "{}";
+        }
+        return request;
+      }
+      getPayloadCodec() {
+        return this.codec;
+      }
+      async handleError(operationSchema, context, response, dataObject, metadata) {
+        const { awsQueryCompatible } = this;
+        if (awsQueryCompatible) {
+          this.mixin.setQueryCompatError(dataObject, response);
+        }
+        const errorIdentifier = loadJsonRpcErrorCode(response, dataObject, awsQueryCompatible) ?? "Unknown";
+        this.mixin.compose(this.compositeErrorRegistry, errorIdentifier, this.options.defaultNamespace);
+        const { errorSchema, errorMetadata } = await this.mixin.getErrorSchemaOrThrowBaseException(errorIdentifier, this.options.defaultNamespace, response, dataObject, metadata, awsQueryCompatible ? this.mixin.findQueryCompatibleError : void 0);
+        const ns = NormalizedSchema.of(errorSchema);
+        const message = dataObject.message ?? dataObject.Message ?? "UnknownError";
+        const ErrorCtor = this.compositeErrorRegistry.getErrorCtor(errorSchema) ?? Error;
+        const exception = new ErrorCtor({});
+        const output = {};
+        const errorDeserializer = this.codec.createDeserializer();
+        for (const [name, member2] of ns.structIterator()) {
+          if (dataObject[name] != null) {
+            output[name] = errorDeserializer.readObject(member2, dataObject[name]);
+          }
+        }
+        if (awsQueryCompatible) {
+          this.mixin.queryCompatOutput(dataObject, output);
+        }
+        throw this.mixin.decorateServiceException(Object.assign(exception, errorMetadata, {
+          $fault: ns.getMergedTraits().error,
+          message
+        }, output), dataObject);
+      }
+    };
+  }
+});
+
+// node_modules/@aws-sdk/core/dist-es/submodules/protocols/json/AwsJson1_0Protocol.js
+var AwsJson1_0Protocol;
+var init_AwsJson1_0Protocol = __esm({
+  "node_modules/@aws-sdk/core/dist-es/submodules/protocols/json/AwsJson1_0Protocol.js"() {
+    init_AwsJsonRpcProtocol();
+    AwsJson1_0Protocol = class extends AwsJsonRpcProtocol {
+      constructor({ defaultNamespace, errorTypeRegistries: errorTypeRegistries5, serviceTarget, awsQueryCompatible, jsonCodec }) {
+        super({
+          defaultNamespace,
+          errorTypeRegistries: errorTypeRegistries5,
+          serviceTarget,
+          awsQueryCompatible,
+          jsonCodec
+        });
+      }
+      getShapeId() {
+        return "aws.protocols#awsJson1_0";
+      }
+      getJsonRpcVersion() {
+        return "1.0";
+      }
+      getDefaultContentType() {
+        return "application/x-amz-json-1.0";
+      }
+    };
+  }
+});
+
+// node_modules/@aws-sdk/core/dist-es/submodules/protocols/json/AwsJson1_1Protocol.js
+var AwsJson1_1Protocol;
+var init_AwsJson1_1Protocol = __esm({
+  "node_modules/@aws-sdk/core/dist-es/submodules/protocols/json/AwsJson1_1Protocol.js"() {
+    init_AwsJsonRpcProtocol();
+    AwsJson1_1Protocol = class extends AwsJsonRpcProtocol {
+      constructor({ defaultNamespace, errorTypeRegistries: errorTypeRegistries5, serviceTarget, awsQueryCompatible, jsonCodec }) {
+        super({
+          defaultNamespace,
+          errorTypeRegistries: errorTypeRegistries5,
+          serviceTarget,
+          awsQueryCompatible,
+          jsonCodec
+        });
+      }
+      getShapeId() {
+        return "aws.protocols#awsJson1_1";
+      }
+      getJsonRpcVersion() {
+        return "1.1";
+      }
+      getDefaultContentType() {
+        return "application/x-amz-json-1.1";
+      }
+    };
+  }
+});
+
+// node_modules/@aws-sdk/core/dist-es/submodules/protocols/json/AwsRestJsonProtocol.js
+var AwsRestJsonProtocol;
+var init_AwsRestJsonProtocol = __esm({
+  "node_modules/@aws-sdk/core/dist-es/submodules/protocols/json/AwsRestJsonProtocol.js"() {
+    init_protocols();
+    init_schema();
+    init_ProtocolLib();
+    init_JsonCodec2();
+    init_parseJsonBody();
+    AwsRestJsonProtocol = class extends HttpBindingProtocol {
+      serializer;
+      deserializer;
+      codec;
+      mixin = new ProtocolLib();
+      constructor({ defaultNamespace, errorTypeRegistries: errorTypeRegistries5, jsonCodec }) {
+        super({
+          defaultNamespace,
+          errorTypeRegistries: errorTypeRegistries5
+        });
+        const settings = {
+          timestampFormat: {
+            useTrait: true,
+            default: 7
+          },
+          httpBindings: true,
+          jsonName: true
+        };
+        this.codec = jsonCodec ?? new JsonCodec2(settings);
+        this.serializer = new HttpInterceptingShapeSerializer(this.codec.createSerializer(), settings);
+        this.deserializer = new HttpInterceptingShapeDeserializer(this.codec.createDeserializer(), settings);
+      }
+      getShapeId() {
+        return "aws.protocols#restJson1";
+      }
+      getPayloadCodec() {
+        return this.codec;
+      }
+      setSerdeContext(serdeContext) {
+        this.codec.setSerdeContext(serdeContext);
+        super.setSerdeContext(serdeContext);
+      }
+      async serializeRequest(operationSchema, input, context) {
+        const request = await super.serializeRequest(operationSchema, input, context);
+        const inputSchema = NormalizedSchema.of(operationSchema.input);
+        if (!request.headers["content-type"]) {
+          const contentType = this.mixin.resolveRestContentType(this.getDefaultContentType(), inputSchema);
+          if (contentType) {
+            request.headers["content-type"] = contentType;
+          }
+        }
+        if (request.body == null && request.headers["content-type"] === this.getDefaultContentType()) {
+          request.body = "{}";
+        }
+        return request;
+      }
+      async deserializeResponse(operationSchema, context, response) {
+        const output = await super.deserializeResponse(operationSchema, context, response);
+        const outputSchema = NormalizedSchema.of(operationSchema.output);
+        for (const [name, member2] of outputSchema.structIterator()) {
+          if (member2.getMemberTraits().httpPayload && !(name in output)) {
+            output[name] = null;
+          }
+        }
+        return output;
+      }
+      async handleError(operationSchema, context, response, dataObject, metadata) {
+        const errorIdentifier = loadRestJsonErrorCode(response, dataObject) ?? "Unknown";
+        this.mixin.compose(this.compositeErrorRegistry, errorIdentifier, this.options.defaultNamespace);
+        const { errorSchema, errorMetadata } = await this.mixin.getErrorSchemaOrThrowBaseException(errorIdentifier, this.options.defaultNamespace, response, dataObject, metadata);
+        const ns = NormalizedSchema.of(errorSchema);
+        const message = dataObject.message ?? dataObject.Message ?? "UnknownError";
+        const ErrorCtor = this.compositeErrorRegistry.getErrorCtor(errorSchema) ?? Error;
+        const exception = new ErrorCtor({});
+        await this.deserializeHttpMessage(errorSchema, context, response, dataObject);
+        const output = {};
+        const errorDeserializer = this.codec.createDeserializer();
+        for (const [name, member2] of ns.structIterator()) {
+          const target = member2.getMergedTraits().jsonName ?? name;
+          output[name] = errorDeserializer.readObject(member2, dataObject[target]);
+        }
+        throw this.mixin.decorateServiceException(Object.assign(exception, errorMetadata, {
+          $fault: ns.getMergedTraits().error,
+          message
+        }, output), dataObject);
+      }
+      getDefaultContentType() {
+        return "application/json";
+      }
+    };
   }
 });
 
@@ -19004,7 +20163,7 @@ var init_JsonShapeSerializer = __esm({
             }
             return out;
           }
-          if (value instanceof Uint8Array && (ns.isBlobSchema() || ns.isDocumentSchema())) {
+          if (value instanceof Uint8Array && ns.isBlobSchema()) {
             if (ns === this.rootSchema) {
               return value;
             }
@@ -19044,7 +20203,7 @@ var init_JsonShapeSerializer = __esm({
           }
           return value;
         }
-        if (typeof value === "number" && ns.isNumericSchema()) {
+        if (typeof value === "number") {
           if (Math.abs(value) === Infinity || isNaN(value)) {
             return String(value);
           }
@@ -19061,6 +20220,9 @@ var init_JsonShapeSerializer = __esm({
         }
         if (ns.isDocumentSchema()) {
           if (isObject) {
+            if (value instanceof Uint8Array) {
+              return (this.serdeContext?.base64Encoder ?? toBase64)(value);
+            }
             const out = Array.isArray(value) ? [] : {};
             for (const k5 in value) {
               const v = value[k5];
@@ -19105,1060 +20267,6 @@ var init_JsonCodec = __esm({
       }
       createDeserializer() {
         const deserializer = new JsonShapeDeserializer(this.settings);
-        deserializer.setSerdeContext(this.serdeContext);
-        return deserializer;
-      }
-    };
-  }
-});
-
-// node_modules/@aws-sdk/core/dist-es/submodules/protocols/json/AwsJsonRpcProtocol.js
-var AwsJsonRpcProtocol;
-var init_AwsJsonRpcProtocol = __esm({
-  "node_modules/@aws-sdk/core/dist-es/submodules/protocols/json/AwsJsonRpcProtocol.js"() {
-    init_protocols();
-    init_schema();
-    init_ProtocolLib();
-    init_JsonCodec();
-    init_parseJsonBody();
-    AwsJsonRpcProtocol = class extends RpcProtocol {
-      serializer;
-      deserializer;
-      serviceTarget;
-      codec;
-      mixin;
-      awsQueryCompatible;
-      constructor({ defaultNamespace, errorTypeRegistries: errorTypeRegistries5, serviceTarget, awsQueryCompatible, jsonCodec }) {
-        super({
-          defaultNamespace,
-          errorTypeRegistries: errorTypeRegistries5
-        });
-        this.serviceTarget = serviceTarget;
-        this.codec = jsonCodec ?? new JsonCodec({
-          timestampFormat: {
-            useTrait: true,
-            default: 7
-          },
-          jsonName: false
-        });
-        this.serializer = this.codec.createSerializer();
-        this.deserializer = this.codec.createDeserializer();
-        this.awsQueryCompatible = !!awsQueryCompatible;
-        this.mixin = new ProtocolLib(this.awsQueryCompatible);
-      }
-      async serializeRequest(operationSchema, input, context) {
-        const request = await super.serializeRequest(operationSchema, input, context);
-        if (!request.path.endsWith("/")) {
-          request.path += "/";
-        }
-        request.headers["content-type"] = `application/x-amz-json-${this.getJsonRpcVersion()}`;
-        request.headers["x-amz-target"] = `${this.serviceTarget}.${operationSchema.name}`;
-        if (this.awsQueryCompatible) {
-          request.headers["x-amzn-query-mode"] = "true";
-        }
-        if (deref(operationSchema.input) === "unit" || !request.body) {
-          request.body = "{}";
-        }
-        return request;
-      }
-      getPayloadCodec() {
-        return this.codec;
-      }
-      async handleError(operationSchema, context, response, dataObject, metadata) {
-        const { awsQueryCompatible } = this;
-        if (awsQueryCompatible) {
-          this.mixin.setQueryCompatError(dataObject, response);
-        }
-        const errorIdentifier = loadJsonRpcErrorCode(response, dataObject, awsQueryCompatible) ?? "Unknown";
-        this.mixin.compose(this.compositeErrorRegistry, errorIdentifier, this.options.defaultNamespace);
-        const { errorSchema, errorMetadata } = await this.mixin.getErrorSchemaOrThrowBaseException(errorIdentifier, this.options.defaultNamespace, response, dataObject, metadata, awsQueryCompatible ? this.mixin.findQueryCompatibleError : void 0);
-        const ns = NormalizedSchema.of(errorSchema);
-        const message = dataObject.message ?? dataObject.Message ?? "UnknownError";
-        const ErrorCtor = this.compositeErrorRegistry.getErrorCtor(errorSchema) ?? Error;
-        const exception = new ErrorCtor({});
-        const output = {};
-        const errorDeserializer = this.codec.createDeserializer();
-        for (const [name, member2] of ns.structIterator()) {
-          if (dataObject[name] != null) {
-            output[name] = errorDeserializer.readObject(member2, dataObject[name]);
-          }
-        }
-        if (awsQueryCompatible) {
-          this.mixin.queryCompatOutput(dataObject, output);
-        }
-        throw this.mixin.decorateServiceException(Object.assign(exception, errorMetadata, {
-          $fault: ns.getMergedTraits().error,
-          message
-        }, output), dataObject);
-      }
-    };
-  }
-});
-
-// node_modules/@aws-sdk/core/dist-es/submodules/protocols/json/AwsJson1_0Protocol.js
-var AwsJson1_0Protocol;
-var init_AwsJson1_0Protocol = __esm({
-  "node_modules/@aws-sdk/core/dist-es/submodules/protocols/json/AwsJson1_0Protocol.js"() {
-    init_AwsJsonRpcProtocol();
-    AwsJson1_0Protocol = class extends AwsJsonRpcProtocol {
-      constructor({ defaultNamespace, errorTypeRegistries: errorTypeRegistries5, serviceTarget, awsQueryCompatible, jsonCodec }) {
-        super({
-          defaultNamespace,
-          errorTypeRegistries: errorTypeRegistries5,
-          serviceTarget,
-          awsQueryCompatible,
-          jsonCodec
-        });
-      }
-      getShapeId() {
-        return "aws.protocols#awsJson1_0";
-      }
-      getJsonRpcVersion() {
-        return "1.0";
-      }
-      getDefaultContentType() {
-        return "application/x-amz-json-1.0";
-      }
-    };
-  }
-});
-
-// node_modules/@aws-sdk/core/dist-es/submodules/protocols/json/AwsJson1_1Protocol.js
-var AwsJson1_1Protocol;
-var init_AwsJson1_1Protocol = __esm({
-  "node_modules/@aws-sdk/core/dist-es/submodules/protocols/json/AwsJson1_1Protocol.js"() {
-    init_AwsJsonRpcProtocol();
-    AwsJson1_1Protocol = class extends AwsJsonRpcProtocol {
-      constructor({ defaultNamespace, errorTypeRegistries: errorTypeRegistries5, serviceTarget, awsQueryCompatible, jsonCodec }) {
-        super({
-          defaultNamespace,
-          errorTypeRegistries: errorTypeRegistries5,
-          serviceTarget,
-          awsQueryCompatible,
-          jsonCodec
-        });
-      }
-      getShapeId() {
-        return "aws.protocols#awsJson1_1";
-      }
-      getJsonRpcVersion() {
-        return "1.1";
-      }
-      getDefaultContentType() {
-        return "application/x-amz-json-1.1";
-      }
-    };
-  }
-});
-
-// node_modules/@aws-sdk/core/dist-es/submodules/protocols/json/AwsRestJsonProtocol.js
-var AwsRestJsonProtocol;
-var init_AwsRestJsonProtocol = __esm({
-  "node_modules/@aws-sdk/core/dist-es/submodules/protocols/json/AwsRestJsonProtocol.js"() {
-    init_protocols();
-    init_schema();
-    init_ProtocolLib();
-    init_JsonCodec();
-    init_parseJsonBody();
-    AwsRestJsonProtocol = class extends HttpBindingProtocol {
-      serializer;
-      deserializer;
-      codec;
-      mixin = new ProtocolLib();
-      constructor({ defaultNamespace, errorTypeRegistries: errorTypeRegistries5 }) {
-        super({
-          defaultNamespace,
-          errorTypeRegistries: errorTypeRegistries5
-        });
-        const settings = {
-          timestampFormat: {
-            useTrait: true,
-            default: 7
-          },
-          httpBindings: true,
-          jsonName: true
-        };
-        this.codec = new JsonCodec(settings);
-        this.serializer = new HttpInterceptingShapeSerializer(this.codec.createSerializer(), settings);
-        this.deserializer = new HttpInterceptingShapeDeserializer(this.codec.createDeserializer(), settings);
-      }
-      getShapeId() {
-        return "aws.protocols#restJson1";
-      }
-      getPayloadCodec() {
-        return this.codec;
-      }
-      setSerdeContext(serdeContext) {
-        this.codec.setSerdeContext(serdeContext);
-        super.setSerdeContext(serdeContext);
-      }
-      async serializeRequest(operationSchema, input, context) {
-        const request = await super.serializeRequest(operationSchema, input, context);
-        const inputSchema = NormalizedSchema.of(operationSchema.input);
-        if (!request.headers["content-type"]) {
-          const contentType = this.mixin.resolveRestContentType(this.getDefaultContentType(), inputSchema);
-          if (contentType) {
-            request.headers["content-type"] = contentType;
-          }
-        }
-        if (request.body == null && request.headers["content-type"] === this.getDefaultContentType()) {
-          request.body = "{}";
-        }
-        return request;
-      }
-      async deserializeResponse(operationSchema, context, response) {
-        const output = await super.deserializeResponse(operationSchema, context, response);
-        const outputSchema = NormalizedSchema.of(operationSchema.output);
-        for (const [name, member2] of outputSchema.structIterator()) {
-          if (member2.getMemberTraits().httpPayload && !(name in output)) {
-            output[name] = null;
-          }
-        }
-        return output;
-      }
-      async handleError(operationSchema, context, response, dataObject, metadata) {
-        const errorIdentifier = loadRestJsonErrorCode(response, dataObject) ?? "Unknown";
-        this.mixin.compose(this.compositeErrorRegistry, errorIdentifier, this.options.defaultNamespace);
-        const { errorSchema, errorMetadata } = await this.mixin.getErrorSchemaOrThrowBaseException(errorIdentifier, this.options.defaultNamespace, response, dataObject, metadata);
-        const ns = NormalizedSchema.of(errorSchema);
-        const message = dataObject.message ?? dataObject.Message ?? "UnknownError";
-        const ErrorCtor = this.compositeErrorRegistry.getErrorCtor(errorSchema) ?? Error;
-        const exception = new ErrorCtor({});
-        await this.deserializeHttpMessage(errorSchema, context, response, dataObject);
-        const output = {};
-        const errorDeserializer = this.codec.createDeserializer();
-        for (const [name, member2] of ns.structIterator()) {
-          const target = member2.getMergedTraits().jsonName ?? name;
-          output[name] = errorDeserializer.readObject(member2, dataObject[target]);
-        }
-        throw this.mixin.decorateServiceException(Object.assign(exception, errorMetadata, {
-          $fault: ns.getMergedTraits().error,
-          message
-        }, output), dataObject);
-      }
-      getDefaultContentType() {
-        return "application/json";
-      }
-    };
-  }
-});
-
-// node_modules/@aws-sdk/core/dist-es/submodules/protocols/json/codec-v2/JsonShapeDeserializer2.js
-var JsonShapeDeserializer2;
-var init_JsonShapeDeserializer2 = __esm({
-  "node_modules/@aws-sdk/core/dist-es/submodules/protocols/json/codec-v2/JsonShapeDeserializer2.js"() {
-    init_protocols();
-    init_schema();
-    init_serde();
-    init_ConfigurableSerdeContext();
-    init_UnionSerde();
-    init_detectBufferParsing();
-    init_jsonReviver();
-    init_needsReviver();
-    init_parseJsonBody();
-    init_writeKey();
-    JsonShapeDeserializer2 = class extends SerdeContextConfig {
-      settings;
-      constructor(settings) {
-        super();
-        this.settings = settings;
-      }
-      async read(schema, data) {
-        const reviver = needsReviver(schema) ? jsonReviver : void 0;
-        let parsed;
-        if (typeof data === "string") {
-          if (data.length === 0) {
-            return {};
-          }
-          parsed = JSON.parse(data, reviver);
-        } else if (data instanceof Uint8Array && detectBufferParsing()) {
-          if (data.byteLength === 0) {
-            return {};
-          }
-          const buf2 = Buffer.isBuffer(data) ? data : Buffer.from(data.buffer, data.byteOffset, data.byteLength);
-          parsed = JSON.parse(buf2, reviver);
-        } else {
-          parsed = await parseJsonBody2(data, this.serdeContext, schema);
-        }
-        return this._read(schema, parsed);
-      }
-      readObject(schema, data) {
-        return this._read(schema, data);
-      }
-      _read(schema, value) {
-        const isObject = value !== null && typeof value === "object";
-        const ns = NormalizedSchema.of(schema);
-        if (isObject) {
-          if (ns.isStructSchema()) {
-            return this._readStruct(ns, value);
-          }
-          if (Array.isArray(value) && ns.isListSchema()) {
-            const listMember = ns.getValueSchema();
-            if (this.needsTransform(listMember)) {
-              for (let i5 = 0; i5 < value.length; ++i5) {
-                value[i5] = this._read(listMember, value[i5]);
-              }
-            }
-            return value;
-          }
-          if (ns.isMapSchema()) {
-            const mapMember = ns.getValueSchema();
-            const map3 = value;
-            if (this.needsTransform(mapMember)) {
-              for (const k5 in map3) {
-                if (k5 === "__proto__") {
-                  writeKey(map3);
-                }
-                map3[k5] = this._read(mapMember, map3[k5]);
-              }
-            }
-            return map3;
-          }
-        }
-        if (ns.isBlobSchema() && typeof value === "string") {
-          return fromBase64(value);
-        }
-        const mediaType = ns.getMergedTraits().mediaType;
-        if (ns.isStringSchema() && typeof value === "string" && mediaType) {
-          const isJson = mediaType === "application/json" || mediaType.endsWith("+json");
-          if (isJson) {
-            return LazyJsonString.from(value);
-          }
-          return value;
-        }
-        if (ns.isTimestampSchema() && value != null) {
-          const format2 = determineTimestampFormat(ns, this.settings);
-          switch (format2) {
-            case 5:
-              return parseRfc3339DateTimeWithOffset(value);
-            case 6:
-              return parseRfc7231DateTime(value);
-            case 7:
-              return parseEpochTimestamp(value);
-            default:
-              console.warn("Missing timestamp format, parsing value with Date constructor:", value);
-              return new Date(value);
-          }
-        }
-        if (ns.isBigIntegerSchema() && (typeof value === "number" || typeof value === "string")) {
-          return BigInt(value);
-        }
-        if (ns.isBigDecimalSchema() && value != void 0) {
-          if (value instanceof NumericValue) {
-            return value;
-          }
-          const untyped = value;
-          if (untyped.type === "bigDecimal" && "string" in untyped) {
-            return new NumericValue(untyped.string, untyped.type);
-          }
-          return new NumericValue(String(value), "bigDecimal");
-        }
-        if (ns.isNumericSchema() && typeof value === "string") {
-          switch (value) {
-            case "Infinity":
-              return Infinity;
-            case "-Infinity":
-              return -Infinity;
-            case "NaN":
-              return NaN;
-          }
-          return value;
-        }
-        if (ns.isDocumentSchema()) {
-          if (isObject) {
-            if (Array.isArray(value)) {
-              for (let i5 = 0; i5 < value.length; ++i5) {
-                const v = value[i5];
-                if (!(v instanceof NumericValue)) {
-                  value[i5] = this._read(ns, v);
-                }
-              }
-            } else {
-              const doc = value;
-              for (const k5 in doc) {
-                if (k5 === "__proto__") {
-                  writeKey(doc);
-                }
-                const v = doc[k5];
-                if (!(v instanceof NumericValue)) {
-                  doc[k5] = this._read(ns, v);
-                }
-              }
-            }
-          }
-        }
-        return value;
-      }
-      _readStruct(ns, record) {
-        const union = ns.isUnionSchema();
-        const out = {};
-        let nameMap;
-        const hasType = typeof record.__type === "string";
-        const { jsonName } = this.settings;
-        if (jsonName && hasType) {
-          nameMap = {};
-        }
-        let unionSerde;
-        if (union) {
-          unionSerde = new UnionSerde(record, out);
-        }
-        for (const [memberName, memberSchema] of ns.structIterator()) {
-          let fromKey = memberName;
-          if (jsonName) {
-            fromKey = memberSchema.getMergedTraits().jsonName ?? fromKey;
-            if (hasType) {
-              nameMap[fromKey] = memberName;
-            }
-          }
-          if (union) {
-            unionSerde.mark(fromKey);
-          }
-          if (record[fromKey] != null) {
-            out[memberName] = this._read(memberSchema, record[fromKey]);
-          }
-        }
-        if (union) {
-          unionSerde.writeUnknown();
-        } else if (hasType) {
-          for (const k5 in record) {
-            const v = record[k5];
-            const t = jsonName ? nameMap[k5] ?? k5 : k5;
-            if (!(t in out)) {
-              out[t] = v;
-            }
-          }
-        }
-        return out;
-      }
-      needsTransform(ns) {
-        if (ns.isBlobSchema() || ns.isTimestampSchema() || ns.isBigIntegerSchema() || ns.isBigDecimalSchema()) {
-          return true;
-        }
-        if (ns.isDocumentSchema() || ns.isStructSchema() || ns.isListSchema() || ns.isMapSchema()) {
-          return true;
-        }
-        if (ns.isStringSchema() && ns.getMergedTraits().mediaType) {
-          return true;
-        }
-        return false;
-      }
-    };
-  }
-});
-
-// node_modules/@aws-sdk/core/dist-es/submodules/protocols/json/codec-v2/JsonBytesStringAdapter.js
-var JsonBytesStringAdapter, warned;
-var init_JsonBytesStringAdapter = __esm({
-  "node_modules/@aws-sdk/core/dist-es/submodules/protocols/json/codec-v2/JsonBytesStringAdapter.js"() {
-    init_serde();
-    JsonBytesStringAdapter = class _JsonBytesStringAdapter extends Uint8Array {
-      string = null;
-      static allocUnsafe(bytes) {
-        if (typeof Buffer === "function") {
-          const buffer = Buffer.allocUnsafe(bytes);
-          return new _JsonBytesStringAdapter(buffer.buffer, buffer.byteOffset, buffer.byteLength);
-        }
-        return new _JsonBytesStringAdapter(bytes);
-      }
-      toString() {
-        return this.s();
-      }
-      valueOf() {
-        return this.s();
-      }
-      includes(searchString, position) {
-        if (typeof searchString === "string") {
-          return this.s().includes(searchString, position);
-        }
-        return Uint8Array.prototype.includes.call(this, searchString, position);
-      }
-      indexOf(searchString, position) {
-        if (typeof searchString === "string") {
-          return this.s().indexOf(searchString, position);
-        }
-        return Uint8Array.prototype.indexOf.call(this, searchString, position);
-      }
-      lastIndexOf(searchString, position) {
-        if (typeof searchString === "string") {
-          return this.s().lastIndexOf(searchString, position);
-        }
-        const fn = Uint8Array.prototype.lastIndexOf;
-        if (position !== void 0) {
-          return fn.call(this, searchString, position);
-        }
-        return fn.call(this, searchString);
-      }
-      startsWith(searchString, position) {
-        return this.s().startsWith(searchString, position);
-      }
-      endsWith(searchString, endPosition) {
-        return this.s().endsWith(searchString, endPosition);
-      }
-      match(regexp) {
-        return this.s().match(regexp);
-      }
-      replace(searchValue, replaceValue) {
-        return this.s().replace(searchValue, replaceValue);
-      }
-      search(regexp) {
-        return this.s().search(regexp);
-      }
-      split(separator, limit) {
-        return this.s().split(separator, limit);
-      }
-      substring(start, end2) {
-        return this.s().substring(start, end2);
-      }
-      trim() {
-        return this.s().trim();
-      }
-      trimStart() {
-        return this.s().trimStart();
-      }
-      trimEnd() {
-        return this.s().trimEnd();
-      }
-      charAt(pos2) {
-        return this.s().charAt(pos2);
-      }
-      charCodeAt(index) {
-        return this.s().charCodeAt(index);
-      }
-      padStart(maxLength, fillString) {
-        return this.s().padStart(maxLength, fillString);
-      }
-      padEnd(maxLength, fillString) {
-        return this.s().padEnd(maxLength, fillString);
-      }
-      repeat(count) {
-        return this.s().repeat(count);
-      }
-      toUpperCase() {
-        return this.s().toUpperCase();
-      }
-      toLowerCase() {
-        return this.s().toLowerCase();
-      }
-      s() {
-        if (this.string == null) {
-          const n3 = Date.now();
-          if (n3 > warned + 6e4) {
-            console.warn("@aws-sdk/core/protocols - WARN - JsonCodec2: you have called a string method on a Uint8Array request body. It has been automatically converted to string. In a future version this will throw an error.");
-            warned = n3;
-          }
-          this.string = toUtf8(this);
-        }
-        return this.string;
-      }
-    };
-    warned = 0;
-  }
-});
-
-// node_modules/@aws-sdk/core/dist-es/submodules/protocols/json/codec-v2/JsonShapeSerializer2.js
-function alloc(size) {
-  return JsonBytesStringAdapter.allocUnsafe(size);
-}
-var encoder, OPEN_BRACE, CLOSE_BRACE, OPEN_BRACKET, CLOSE_BRACKET, QUOTE, COLON, COMMA, BACKSLASH, TRUE, FALSE, NULL, ESCAPE_TABLE, INITIAL_BUFFER_SIZE2, JsonShapeSerializer2;
-var init_JsonShapeSerializer2 = __esm({
-  "node_modules/@aws-sdk/core/dist-es/submodules/protocols/json/codec-v2/JsonShapeSerializer2.js"() {
-    init_protocols();
-    init_schema();
-    init_serde();
-    init_ConfigurableSerdeContext();
-    init_writeKey();
-    init_JsonBytesStringAdapter();
-    encoder = new TextEncoder();
-    OPEN_BRACE = 123;
-    CLOSE_BRACE = 125;
-    OPEN_BRACKET = 91;
-    CLOSE_BRACKET = 93;
-    QUOTE = 34;
-    COLON = 58;
-    COMMA = 44;
-    BACKSLASH = 92;
-    TRUE = new Uint8Array([116, 114, 117, 101]);
-    FALSE = new Uint8Array([102, 97, 108, 115, 101]);
-    NULL = new Uint8Array([110, 117, 108, 108]);
-    ESCAPE_TABLE = new Array(128).fill(null);
-    ESCAPE_TABLE[8] = "b";
-    ESCAPE_TABLE[9] = "t";
-    ESCAPE_TABLE[10] = "n";
-    ESCAPE_TABLE[12] = "f";
-    ESCAPE_TABLE[13] = "r";
-    ESCAPE_TABLE[34] = '"';
-    ESCAPE_TABLE[92] = "\\";
-    for (let i5 = 0; i5 < 32; i5++) {
-      if (ESCAPE_TABLE[i5] === null) {
-        ESCAPE_TABLE[i5] = "u00" + i5.toString(16).padStart(2, "0");
-      }
-    }
-    INITIAL_BUFFER_SIZE2 = 2048;
-    JsonShapeSerializer2 = class _JsonShapeSerializer2 extends SerdeContextConfig {
-      settings;
-      json;
-      i = 0;
-      rootSchema;
-      rawValue;
-      passthrough = false;
-      constructor(settings) {
-        super();
-        this.settings = settings;
-        this.json = alloc(INITIAL_BUFFER_SIZE2);
-      }
-      write(schema, value) {
-        this.i = 0;
-        this.rawValue = value;
-        this.rootSchema = NormalizedSchema.of(schema);
-        this.passthrough = this.rootSchema.isBlobSchema() || this.rootSchema.isStringSchema();
-        if (!this.passthrough) {
-          this.writeValue(this.rootSchema, value, void 0);
-        }
-      }
-      writeDiscriminatedDocument(schema, value) {
-        this.i = 0;
-        this.rootSchema = NormalizedSchema.of(schema);
-        const ns = this.rootSchema;
-        if (ns.isStructSchema() && value != null && typeof value === "object") {
-          this.writeValue(ns, value, void 0);
-          const prefix = `"__type":"${ns.getName(true) ?? "Unknown"}",`;
-          const z = prefix.length;
-          this.ensure(z);
-          this.json.copyWithin(1 + z, 1, this.i);
-          encoder.encodeInto(prefix, this.json.subarray(1));
-          this.i += z;
-        } else {
-          this.writeValue(ns, value, void 0);
-        }
-      }
-      flush() {
-        this.rootSchema = void 0;
-        const finalPosition = this.i;
-        this.i = 0;
-        const raw = this.rawValue;
-        this.rawValue = void 0;
-        if (finalPosition === 0) {
-          return raw;
-        }
-        const result = this.json.subarray(0, finalPosition);
-        this.json = alloc(INITIAL_BUFFER_SIZE2);
-        return result;
-      }
-      ensure(byteCount) {
-        const { i: i5, json: json2 } = this;
-        if (i5 + byteCount > json2.length) {
-          let newSize = json2.length * 2;
-          while (newSize < i5 + byteCount) {
-            newSize *= 2;
-          }
-          const next = alloc(newSize);
-          next.set(this.json);
-          this.json = next;
-        }
-      }
-      writeAscii(s2) {
-        const z = s2.length;
-        this.ensure(z);
-        let { i: i5, json: json2 } = this;
-        for (let j5 = 0; j5 < z; ++j5) {
-          json2[i5] = s2.charCodeAt(j5);
-          i5 += 1;
-        }
-        this.i = i5;
-      }
-      writeAsciiQuoted(s2) {
-        const z = s2.length;
-        this.ensure(z + 4);
-        let { json: json2, i: i5 } = this;
-        json2[i5++] = QUOTE;
-        for (let j5 = 0; j5 < z; ++j5) {
-          json2[i5++] = s2.charCodeAt(j5);
-        }
-        json2[i5++] = QUOTE;
-        this.i = i5;
-      }
-      writeJsonString(s2) {
-        this.ensure(s2.length * 3 + 2);
-        this.json[this.i++] = QUOTE;
-        const z = s2.length;
-        for (let j5 = 0; j5 < z; ++j5) {
-          const c5 = s2.charCodeAt(j5);
-          if (c5 > 34 && c5 < 92) {
-            this.json[this.i++] = c5;
-          } else if (c5 < 128) {
-            const esc = ESCAPE_TABLE[c5];
-            if (esc !== null) {
-              this.ensure(esc.length + 1);
-              this.json[this.i++] = BACKSLASH;
-              for (let k5 = 0; k5 < esc.length; k5++) {
-                this.json[this.i++] = esc.charCodeAt(k5);
-              }
-            } else {
-              this.json[this.i++] = c5;
-            }
-          } else if (c5 >= 55296 && c5 <= 56319) {
-            const next = j5 + 1 < z ? s2.charCodeAt(j5 + 1) : 0;
-            if (next >= 56320 && next <= 57343) {
-              this.ensure(4);
-              const { written } = encoder.encodeInto(s2.substring(j5, j5 + 2), this.json.subarray(this.i));
-              this.i += written;
-              ++j5;
-            } else {
-              this.ensure(6);
-              this.writeUnicodeEscape(c5);
-            }
-          } else if (c5 >= 56320 && c5 <= 57343) {
-            this.ensure(6);
-            this.writeUnicodeEscape(c5);
-          } else {
-            let { i: i5, json: json2 } = this;
-            if (c5 < 2048) {
-              json2[i5++] = 192 | c5 >> 6;
-              json2[i5++] = 128 | c5 & 63;
-            } else {
-              json2[i5++] = 224 | c5 >> 12;
-              json2[i5++] = 128 | c5 >> 6 & 63;
-              json2[i5++] = 128 | c5 & 63;
-            }
-            this.i = i5;
-          }
-        }
-        this.json[this.i++] = QUOTE;
-      }
-      writeUnicodeEscape(code) {
-        let { json: json2, i: i5 } = this;
-        json2[i5++] = BACKSLASH;
-        json2[i5++] = 117;
-        const hex = code.toString(16).padStart(4, "0");
-        for (let j5 = 0; j5 < 4; ++j5) {
-          json2[i5++] = hex.charCodeAt(j5);
-        }
-        this.i = i5;
-      }
-      static B64 = (() => {
-        const chars2 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-        const table = new Uint8Array(64);
-        for (let i5 = 0; i5 < 64; ++i5) {
-          table[i5] = chars2.charCodeAt(i5);
-        }
-        return table;
-      })();
-      writeBase64(data) {
-        const b64Len = Math.ceil(data.length / 3) * 4;
-        this.ensure(b64Len + 2);
-        const json2 = this.json;
-        const B64 = _JsonShapeSerializer2.B64;
-        let i5 = this.i;
-        json2[i5++] = QUOTE;
-        const len = data.length;
-        const remainder = len % 3;
-        const mainLen = len - remainder;
-        for (let j5 = 0; j5 < mainLen; j5 += 3) {
-          const a5 = data[j5];
-          const b5 = data[j5 + 1];
-          const c5 = data[j5 + 2];
-          json2[i5++] = B64[a5 >> 2];
-          json2[i5++] = B64[(a5 & 3) << 4 | b5 >> 4];
-          json2[i5++] = B64[(b5 & 15) << 2 | c5 >> 6];
-          json2[i5++] = B64[c5 & 63];
-        }
-        if (remainder === 2) {
-          const a5 = data[mainLen];
-          const b5 = data[mainLen + 1];
-          json2[i5++] = B64[a5 >> 2];
-          json2[i5++] = B64[(a5 & 3) << 4 | b5 >> 4];
-          json2[i5++] = B64[(b5 & 15) << 2];
-          json2[i5++] = 61;
-        } else if (remainder === 1) {
-          const a5 = data[mainLen];
-          json2[i5++] = B64[a5 >> 2];
-          json2[i5++] = B64[(a5 & 3) << 4];
-          json2[i5++] = 61;
-          json2[i5++] = 61;
-        }
-        json2[i5++] = QUOTE;
-        this.i = i5;
-      }
-      writeValue(schema, value, container) {
-        if (value == null) {
-          if (container?.isStructSchema()) {
-            if (value === void 0) {
-              const ns2 = NormalizedSchema.of(schema);
-              if (ns2.isIdempotencyToken()) {
-                this.writeAsciiQuoted(generateIdempotencyToken());
-                return;
-              }
-            }
-            return;
-          }
-          this.ensure(4);
-          this.json.set(NULL, this.i);
-          this.i += 4;
-          return;
-        }
-        const ns = NormalizedSchema.of(schema);
-        const isObject = typeof value === "object";
-        if (ns.isStringSchema()) {
-          const mediaType = ns.getMergedTraits().mediaType;
-          if (mediaType) {
-            const isJson = mediaType === "application/json" || mediaType.endsWith("+json");
-            if (isJson) {
-              this.writeJsonString(LazyJsonString.from(value).toString());
-              return;
-            }
-          }
-        }
-        if (isObject) {
-          if (ns.isStructSchema()) {
-            this.writeStruct(ns, value);
-            return;
-          }
-          if (Array.isArray(value) && (ns.isListSchema() || ns.isDocumentSchema())) {
-            this.writeList(ns, value, ns.isDocumentSchema());
-            return;
-          }
-          if (ns.isMapSchema()) {
-            this.writeMap(ns, value, false);
-            return;
-          }
-          if (value instanceof Uint8Array && (ns.isBlobSchema() || ns.isDocumentSchema())) {
-            this.writeBase64(value);
-            return;
-          }
-          if (value instanceof Date && (ns.isTimestampSchema() || ns.isDocumentSchema())) {
-            this.writeTimestamp(ns, value);
-            return;
-          }
-          if (value instanceof NumericValue) {
-            this.writeAscii(value.string);
-            return;
-          }
-          if (ns.isDocumentSchema()) {
-            if (Array.isArray(value)) {
-              this.writeList(ns, value, true);
-            } else {
-              this.writeMap(ns, value, true);
-            }
-            return;
-          }
-          const json2 = JSON.stringify(value);
-          this.writeAscii(json2);
-          return;
-        }
-        if (typeof value === "string") {
-          if (ns.isBlobSchema()) {
-            const b64 = (this.serdeContext?.base64Encoder ?? toBase64)(value);
-            this.writeAsciiQuoted(b64);
-            return;
-          }
-          this.writeJsonString(value);
-          return;
-        }
-        if (typeof value === "number") {
-          if (ns.isNumericSchema() && (Math.abs(value) === Infinity || isNaN(value))) {
-            this.writeAsciiQuoted(String(value));
-            return;
-          }
-          const numStr = String(value);
-          this.writeAscii(numStr);
-          return;
-        }
-        if (typeof value === "boolean") {
-          this.ensure(5);
-          let { i: i5, json: json2 } = this;
-          if (value) {
-            json2.set(TRUE, i5);
-            i5 += 4;
-          } else {
-            json2.set(FALSE, i5);
-            i5 += 5;
-          }
-          this.i = i5;
-          return;
-        }
-        if (typeof value === "bigint") {
-          this.writeAscii(value.toString());
-          return;
-        }
-        this.writeAscii(String(value));
-      }
-      writeStruct(ns, value) {
-        this.ensure(2);
-        this.json[this.i++] = OPEN_BRACE;
-        let wroteAny = false;
-        const hasType = typeof value.__type === "string";
-        let writtenKeys;
-        if (hasType) {
-          writtenKeys = /* @__PURE__ */ new Set();
-        }
-        for (const [memberName, memberSchema] of ns.structIterator()) {
-          const item = value[memberName];
-          if (item == null && !memberSchema.isIdempotencyToken()) {
-            continue;
-          }
-          if (wroteAny) {
-            this.ensure(1);
-            this.json[this.i++] = COMMA;
-          }
-          wroteAny = true;
-          const targetKey = this.settings.jsonName ? memberSchema.getMergedTraits().jsonName ?? memberName : memberName;
-          if (writtenKeys) {
-            writtenKeys.add(memberName);
-            writtenKeys.add(targetKey);
-          }
-          this.writeAsciiQuoted(targetKey);
-          this.json[this.i++] = COLON;
-          this.writeValue(memberSchema, item, ns);
-        }
-        if (!wroteAny && ns.isUnionSchema()) {
-          const { $unknown } = value;
-          if (Array.isArray($unknown)) {
-            const [k5, v] = $unknown;
-            this.writeAsciiQuoted(k5);
-            this.ensure(1);
-            this.json[this.i++] = COLON;
-            this.writeValue(15, v, ns);
-          }
-        } else if (hasType) {
-          for (const k5 in value) {
-            if (writtenKeys.has(k5)) {
-              continue;
-            }
-            writtenKeys.add(k5);
-            const v = value[k5];
-            if (wroteAny) {
-              this.ensure(1);
-              this.json[this.i++] = COMMA;
-            }
-            wroteAny = true;
-            this.writeAsciiQuoted(k5);
-            this.ensure(1);
-            this.json[this.i++] = COLON;
-            this.writeValue(15, v, void 0);
-          }
-        }
-        this.ensure(1);
-        this.json[this.i++] = CLOSE_BRACE;
-      }
-      writeList(ns, value, isDocument) {
-        const sparse = !!ns.getMergedTraits().sparse;
-        const valueSchema = ns.getValueSchema();
-        if (!isDocument) {
-          if (valueSchema.isStringSchema() || valueSchema.isNumericSchema() || valueSchema.isBooleanSchema()) {
-            const json2 = sparse ? JSON.stringify(value) : JSON.stringify(value.filter((_) => _ != null));
-            this.ensure(json2.length * 3);
-            this.i += encoder.encodeInto(json2, this.json.subarray(this.i)).written;
-            return;
-          }
-        }
-        this.ensure(2);
-        this.json[this.i++] = OPEN_BRACKET;
-        let wroteFirstItem = false;
-        for (let i5 = 0; i5 < value.length; ++i5) {
-          const item = value[i5];
-          if (isDocument ? item === void 0 : item == null && !sparse) {
-            continue;
-          }
-          if (wroteFirstItem) {
-            this.ensure(1);
-            this.json[this.i++] = COMMA;
-          }
-          this.writeValue(valueSchema, item, void 0);
-          wroteFirstItem = true;
-        }
-        this.ensure(1);
-        this.json[this.i++] = CLOSE_BRACKET;
-      }
-      writeMap(ns, value, isDocument) {
-        const sparse = !!ns.getMergedTraits().sparse;
-        const valueSchema = ns.getValueSchema();
-        if (!isDocument) {
-          if (valueSchema.isStringSchema() || valueSchema.isNumericSchema() || valueSchema.isBooleanSchema()) {
-            let input = value;
-            if (sparse) {
-              input = {};
-              for (const k5 in value) {
-                if (k5 === "__proto__") {
-                  writeKey(input);
-                }
-                input[k5] = value[k5] ?? null;
-              }
-            }
-            const json2 = JSON.stringify(input);
-            this.ensure(json2.length * 3);
-            this.i += encoder.encodeInto(json2, this.json.subarray(this.i)).written;
-            return;
-          }
-        }
-        this.ensure(2);
-        this.json[this.i++] = OPEN_BRACE;
-        let first = true;
-        for (const k5 in value) {
-          const v = value[k5];
-          if (isDocument ? v === void 0 : v == null && !sparse) {
-            continue;
-          }
-          if (!first) {
-            this.ensure(1);
-            this.json[this.i++] = COMMA;
-          }
-          first = false;
-          this.writeJsonString(k5);
-          this.ensure(1);
-          this.json[this.i++] = COLON;
-          this.writeValue(valueSchema, v, void 0);
-        }
-        this.ensure(1);
-        this.json[this.i++] = CLOSE_BRACE;
-      }
-      writeTimestamp(ns, value) {
-        const format2 = determineTimestampFormat(ns, this.settings);
-        switch (format2) {
-          case 5: {
-            const iso = value.toISOString().replace(".000Z", "Z");
-            this.writeAsciiQuoted(iso);
-            return;
-          }
-          case 6: {
-            this.writeAsciiQuoted(dateToUtcString(value));
-            return;
-          }
-          case 7: {
-            const epochSecs = String(value.getTime() / 1e3);
-            this.writeAscii(epochSecs);
-            return;
-          }
-          default: {
-            const epochSecs = String(value.getTime() / 1e3);
-            this.writeAscii(epochSecs);
-            return;
-          }
-        }
-      }
-    };
-  }
-});
-
-// node_modules/@aws-sdk/core/dist-es/submodules/protocols/json/codec-v2/JsonCodec2.js
-var JsonCodec2;
-var init_JsonCodec2 = __esm({
-  "node_modules/@aws-sdk/core/dist-es/submodules/protocols/json/codec-v2/JsonCodec2.js"() {
-    init_ConfigurableSerdeContext();
-    init_JsonShapeDeserializer2();
-    init_JsonShapeSerializer2();
-    JsonCodec2 = class extends SerdeContextConfig {
-      settings;
-      constructor(settings) {
-        super();
-        this.settings = settings;
-      }
-      createSerializer() {
-        const serializer = new JsonShapeSerializer2(this.settings);
-        serializer.setSerdeContext(this.serdeContext);
-        return serializer;
-      }
-      createDeserializer() {
-        const deserializer = new JsonShapeDeserializer2(this.settings);
         deserializer.setSerdeContext(this.serdeContext);
         return deserializer;
       }
@@ -25744,7 +25852,7 @@ var init_signin = __esm({
 var require_dist_cjs13 = __commonJS({
   "node_modules/@aws-sdk/credential-provider-login/dist-cjs/index.js"(exports2) {
     var { setCredentialFeature: setCredentialFeature2 } = (init_client3(), __toCommonJS(client_exports2));
-    var { CredentialsProviderError: CredentialsProviderError2, readFile: readFile3, parseKnownFiles: parseKnownFiles2, getProfileName: getProfileName2 } = (init_config2(), __toCommonJS(config_exports));
+    var { CredentialsProviderError: CredentialsProviderError2, parseKnownFiles: parseKnownFiles2, getProfileName: getProfileName2 } = (init_config2(), __toCommonJS(config_exports));
     var { HttpRequest: HttpRequest2 } = (init_protocols(), __toCommonJS(protocols_exports));
     var { createHash: createHash6, createPrivateKey, createPublicKey, sign: sign2 } = require("node:crypto");
     var { promises } = require("node:fs");
@@ -25772,13 +25880,7 @@ var require_dist_cjs13 = __commonJS({
         if (timeUntilExpiry <= _LoginCredentialsFetcher.REFRESH_THRESHOLD) {
           return this.refresh(token);
         }
-        return {
-          accessKeyId: accessToken.accessKeyId,
-          secretAccessKey: accessToken.secretAccessKey,
-          sessionToken: accessToken.sessionToken,
-          accountId: accessToken.accountId,
-          expiration: new Date(accessToken.expiresAt)
-        };
+        return this.toCredentials(token.accessToken);
       }
       get logger() {
         return this.init?.logger;
@@ -25786,7 +25888,25 @@ var require_dist_cjs13 = __commonJS({
       get loginSession() {
         return this.profileData.login_session;
       }
+      toCredentials(token) {
+        return {
+          accessKeyId: token.accessKeyId,
+          secretAccessKey: token.secretAccessKey,
+          sessionToken: token.sessionToken,
+          accountId: token.accountId,
+          expiration: new Date(token.expiresAt)
+        };
+      }
       async refresh(token) {
+        const diskToken = await this.loadToken().catch(() => token);
+        const now = Date.now();
+        const diskExpiry = new Date(diskToken.accessToken.expiresAt).getTime();
+        const tokenExpiry = new Date(token.accessToken.expiresAt).getTime();
+        const freshToken = diskExpiry <= now && tokenExpiry > now ? token : diskToken;
+        const freshExpiry = new Date(freshToken.accessToken.expiresAt).getTime();
+        if (freshExpiry - Date.now() > _LoginCredentialsFetcher.REFRESH_THRESHOLD) {
+          return this.toCredentials(freshToken.accessToken);
+        }
         const { SigninClient: SigninClient2, CreateOAuth2TokenCommand: CreateOAuth2TokenCommand2 } = (init_signin(), __toCommonJS(signin_exports));
         const { logger: logger2, userAgentAppId } = this.callerClientConfig ?? {};
         const isH22 = (requestHandler2) => {
@@ -25808,8 +25928,8 @@ var require_dist_cjs13 = __commonJS({
         this.createDPoPInterceptor(client.middlewareStack);
         const commandInput = {
           tokenInput: {
-            clientId: token.clientId,
-            refreshToken: token.refreshToken,
+            clientId: freshToken.clientId,
+            refreshToken: freshToken.refreshToken,
             grantType: "refresh_token"
           }
         };
@@ -25826,9 +25946,9 @@ var require_dist_cjs13 = __commonJS({
           const expiresInMs = (expiresIn ?? 900) * 1e3;
           const expiration = new Date(Date.now() + expiresInMs);
           const updatedToken = {
-            ...token,
+            ...freshToken,
             accessToken: {
-              ...token.accessToken,
+              ...freshToken.accessToken,
               accessKeyId,
               secretAccessKey,
               sessionToken,
@@ -25837,14 +25957,7 @@ var require_dist_cjs13 = __commonJS({
             refreshToken
           };
           await this.saveToken(updatedToken);
-          const newAccessToken = updatedToken.accessToken;
-          return {
-            accessKeyId: newAccessToken.accessKeyId,
-            secretAccessKey: newAccessToken.secretAccessKey,
-            sessionToken: newAccessToken.sessionToken,
-            accountId: newAccessToken.accountId,
-            expiration
-          };
+          return this.toCredentials(updatedToken.accessToken);
         } catch (error2) {
           if (error2.name === "AccessDeniedException") {
             const errorType = error2.error;
@@ -25862,7 +25975,15 @@ var require_dist_cjs13 = __commonJS({
               default:
                 message = `Failed to refresh token: ${String(error2)}. Please re-authenticate using \`aws login\``;
             }
-            throw new CredentialsProviderError2(message, { logger: this.logger, tryNextLink: false });
+            throw new CredentialsProviderError2(message, {
+              logger: this.logger,
+              tryNextLink: false
+            });
+          }
+          const tokenExpiry2 = new Date(freshToken.accessToken.expiresAt).getTime();
+          if (tokenExpiry2 > Date.now()) {
+            this.logger?.warn?.(`Failed to refresh token: ${String(error2)}. Using existing token until expiry.`);
+            return this.toCredentials(freshToken.accessToken);
           }
           throw new CredentialsProviderError2(`Failed to refresh token: ${String(error2)}. Please re-authenticate using aws login`, { logger: this.logger });
         }
@@ -25870,12 +25991,7 @@ var require_dist_cjs13 = __commonJS({
       async loadToken() {
         const tokenFilePath = this.getTokenFilePath();
         try {
-          let tokenData;
-          try {
-            tokenData = await readFile3(tokenFilePath, { ignoreCache: this.init?.ignoreCache });
-          } catch {
-            tokenData = await promises.readFile(tokenFilePath, "utf8");
-          }
+          const tokenData = await promises.readFile(tokenFilePath, "utf8");
           const token = JSON.parse(tokenData);
           const missingFields = ["accessToken", "clientId", "refreshToken", "dpopKey"].filter((k5) => !token[k5]);
           if (!token.accessToken?.accountId) {
@@ -33837,6 +33953,7149 @@ var require_dist_cjs21 = __commonJS({
   }
 });
 
+// node_modules/@aws-sdk/client-lambda/dist-cjs/index.js
+var require_dist_cjs22 = __commonJS({
+  "node_modules/@aws-sdk/client-lambda/dist-cjs/index.js"(exports2) {
+    var { awsEndpointFunctions: awsEndpointFunctions2, emitWarningIfUnsupportedVersion: emitWarningIfUnsupportedVersion$1, createDefaultUserAgentProvider: createDefaultUserAgentProvider2, NODE_APP_ID_CONFIG_OPTIONS: NODE_APP_ID_CONFIG_OPTIONS2, getAwsRegionExtensionConfiguration: getAwsRegionExtensionConfiguration2, resolveAwsRegionExtensionConfiguration: resolveAwsRegionExtensionConfiguration2, resolveUserAgentConfig: resolveUserAgentConfig2, resolveHostHeaderConfig: resolveHostHeaderConfig2, getUserAgentPlugin: getUserAgentPlugin2, getHostHeaderPlugin: getHostHeaderPlugin2, getLoggerPlugin: getLoggerPlugin2, getRecursionDetectionPlugin: getRecursionDetectionPlugin2 } = (init_client3(), __toCommonJS(client_exports2));
+    var { getHttpAuthSchemeEndpointRuleSetPlugin: getHttpAuthSchemeEndpointRuleSetPlugin2, DefaultIdentityProviderConfig: DefaultIdentityProviderConfig2, getHttpSigningPlugin: getHttpSigningPlugin2, createPaginator: createPaginator2 } = (init_dist_es(), __toCommonJS(dist_es_exports));
+    var { normalizeProvider: normalizeProvider3, getSmithyContext: getSmithyContext2, ServiceException: ServiceException$1, NoOpLogger: NoOpLogger2, emitWarningIfUnsupportedVersion: emitWarningIfUnsupportedVersion3, loadConfigsForDefaultMode: loadConfigsForDefaultMode2, getDefaultExtensionConfiguration: getDefaultExtensionConfiguration2, resolveDefaultRuntimeConfig: resolveDefaultRuntimeConfig2, Client: Client2, makeBuilder: makeBuilder2, createWaiter: createWaiter2, checkExceptions: checkExceptions2, WaiterState: WaiterState2, createAggregatedClient: createAggregatedClient2 } = (init_client2(), __toCommonJS(client_exports));
+    var { Command: $Command } = (init_client2(), __toCommonJS(client_exports));
+    exports2.$Command = $Command;
+    exports2.__Client = Client2;
+    var { resolveDefaultsModeConfig: resolveDefaultsModeConfig2, loadConfig: loadConfig2, NODE_USE_FIPS_ENDPOINT_CONFIG_OPTIONS: NODE_USE_FIPS_ENDPOINT_CONFIG_OPTIONS2, NODE_USE_DUALSTACK_ENDPOINT_CONFIG_OPTIONS: NODE_USE_DUALSTACK_ENDPOINT_CONFIG_OPTIONS2, NODE_REGION_CONFIG_OPTIONS: NODE_REGION_CONFIG_OPTIONS2, NODE_REGION_CONFIG_FILE_OPTIONS: NODE_REGION_CONFIG_FILE_OPTIONS2, resolveRegionConfig: resolveRegionConfig2 } = (init_config2(), __toCommonJS(config_exports));
+    var { BinaryDecisionDiagram: BinaryDecisionDiagram2, EndpointCache: EndpointCache2, decideEndpoint: decideEndpoint2, customEndpointFunctions: customEndpointFunctions2, resolveEndpointConfig: resolveEndpointConfig2, getEndpointPlugin: getEndpointPlugin2 } = (init_endpoints(), __toCommonJS(endpoints_exports));
+    var { eventStreamSerdeProvider: eventStreamSerdeProvider3, resolveEventStreamSerdeConfig: resolveEventStreamSerdeConfig2 } = (init_event_streams(), __toCommonJS(event_streams_exports));
+    var { parseUrl: parseUrl2, getHttpHandlerExtensionConfiguration: getHttpHandlerExtensionConfiguration2, resolveHttpHandlerRuntimeConfig: resolveHttpHandlerRuntimeConfig2, getContentLengthPlugin: getContentLengthPlugin2 } = (init_protocols(), __toCommonJS(protocols_exports));
+    var { DEFAULT_RETRY_MODE: DEFAULT_RETRY_MODE2, NODE_RETRY_MODE_CONFIG_OPTIONS: NODE_RETRY_MODE_CONFIG_OPTIONS2, NODE_MAX_ATTEMPT_CONFIG_OPTIONS: NODE_MAX_ATTEMPT_CONFIG_OPTIONS2, resolveRetryConfig: resolveRetryConfig2, getRetryPlugin: getRetryPlugin2 } = (init_retry2(), __toCommonJS(retry_exports));
+    var { TypeRegistry: TypeRegistry2, getSchemaSerdePlugin: getSchemaSerdePlugin2 } = (init_schema(), __toCommonJS(schema_exports));
+    var { resolveAwsSdkSigV4Config: resolveAwsSdkSigV4Config2, AwsSdkSigV4Signer: AwsSdkSigV4Signer2, NODE_AUTH_SCHEME_PREFERENCE_OPTIONS: NODE_AUTH_SCHEME_PREFERENCE_OPTIONS2 } = (init_httpAuthSchemes2(), __toCommonJS(httpAuthSchemes_exports));
+    var { defaultProvider } = require_dist_cjs17();
+    var { toUtf8: toUtf83, fromUtf8: fromUtf83, toBase64: toBase643, fromBase64: fromBase642, calculateBodyLength: calculateBodyLength2 } = (init_serde(), __toCommonJS(serde_exports));
+    var { streamCollector: streamCollector7, NodeHttpHandler } = require_dist_cjs7();
+    var { AwsRestJsonProtocol: AwsRestJsonProtocol2 } = (init_protocols2(), __toCommonJS(protocols_exports2));
+    var { Sha256 } = (init_checksum2(), __toCommonJS(checksum_exports));
+    var defaultLambdaHttpAuthSchemeParametersProvider = async (config, context, input) => {
+      return {
+        operation: getSmithyContext2(context).operation,
+        region: await normalizeProvider3(config.region)() || (() => {
+          throw new Error("expected `region` to be configured for `aws.auth#sigv4`");
+        })()
+      };
+    };
+    function createAwsAuthSigv4HttpAuthOption5(authParameters) {
+      return {
+        schemeId: "aws.auth#sigv4",
+        signingProperties: {
+          name: "lambda",
+          region: authParameters.region
+        },
+        propertiesExtractor: (config, context) => ({
+          signingProperties: {
+            config,
+            context
+          }
+        })
+      };
+    }
+    var defaultLambdaHttpAuthSchemeProvider = (authParameters) => {
+      const options = [];
+      switch (authParameters.operation) {
+        default: {
+          options.push(createAwsAuthSigv4HttpAuthOption5(authParameters));
+        }
+      }
+      return options;
+    };
+    var resolveHttpAuthSchemeConfig5 = (config) => {
+      const config_0 = resolveAwsSdkSigV4Config2(config);
+      return Object.assign(config_0, {
+        authSchemePreference: normalizeProvider3(config.authSchemePreference ?? [])
+      });
+    };
+    var resolveClientEndpointParameters5 = (options) => {
+      return Object.assign(options, {
+        useDualstackEndpoint: options.useDualstackEndpoint ?? false,
+        useFipsEndpoint: options.useFipsEndpoint ?? false,
+        defaultSigningName: "lambda"
+      });
+    };
+    var commonParams5 = {
+      UseFIPS: { type: "builtInParams", name: "useFipsEndpoint" },
+      Endpoint: { type: "builtInParams", name: "endpoint" },
+      Region: { type: "builtInParams", name: "region" },
+      UseDualStack: { type: "builtInParams", name: "useDualstackEndpoint" }
+    };
+    var version = "3.1102.0";
+    var packageInfo = {
+      version
+    };
+    var k5 = "ref";
+    var a5 = -1;
+    var b5 = true;
+    var c5 = "isSet";
+    var d5 = "PartitionResult";
+    var e5 = "booleanEquals";
+    var f5 = "getAttr";
+    var g5 = { [k5]: "Endpoint" };
+    var h5 = { [k5]: d5 };
+    var i5 = {};
+    var j5 = [{ [k5]: "Region" }];
+    var _data5 = {
+      conditions: [
+        [c5, [g5]],
+        [c5, j5],
+        ["aws.partition", j5, d5],
+        [e5, [{ [k5]: "UseFIPS" }, b5]],
+        [e5, [{ [k5]: "UseDualStack" }, b5]],
+        [e5, [{ fn: f5, argv: [h5, "supportsDualStack"] }, b5]],
+        [e5, [{ fn: f5, argv: [h5, "supportsFIPS"] }, b5]]
+      ],
+      results: [
+        [a5],
+        [a5, "Invalid Configuration: FIPS and custom endpoint are not supported"],
+        [a5, "Invalid Configuration: Dualstack and custom endpoint are not supported"],
+        [g5, i5],
+        ["https://lambda-fips.{Region}.{PartitionResult#dualStackDnsSuffix}", i5],
+        [a5, "FIPS and DualStack are enabled, but this partition does not support one or both"],
+        ["https://lambda-fips.{Region}.{PartitionResult#dnsSuffix}", i5],
+        [a5, "FIPS is enabled but this partition does not support FIPS"],
+        ["https://lambda.{Region}.{PartitionResult#dualStackDnsSuffix}", i5],
+        [a5, "DualStack is enabled but this partition does not support DualStack"],
+        ["https://lambda.{Region}.{PartitionResult#dnsSuffix}", i5],
+        [a5, "Invalid Configuration: Missing Region"]
+      ]
+    };
+    var root5 = 2;
+    var r5 = 1e8;
+    var nodes5 = new Int32Array([
+      -1,
+      1,
+      -1,
+      0,
+      12,
+      3,
+      1,
+      4,
+      r5 + 11,
+      2,
+      5,
+      r5 + 11,
+      3,
+      8,
+      6,
+      4,
+      7,
+      r5 + 10,
+      5,
+      r5 + 8,
+      r5 + 9,
+      4,
+      10,
+      9,
+      6,
+      r5 + 6,
+      r5 + 7,
+      5,
+      11,
+      r5 + 5,
+      6,
+      r5 + 4,
+      r5 + 5,
+      3,
+      r5 + 1,
+      13,
+      4,
+      r5 + 2,
+      r5 + 3
+    ]);
+    var bdd5 = BinaryDecisionDiagram2.from(nodes5, root5, _data5.conditions, _data5.results);
+    var cache5 = new EndpointCache2({
+      size: 50,
+      params: ["Endpoint", "Region", "UseDualStack", "UseFIPS"]
+    });
+    var defaultEndpointResolver5 = (endpointParams, context = {}) => {
+      return cache5.get(endpointParams, () => decideEndpoint2(bdd5, {
+        endpointParams,
+        logger: context.logger
+      }));
+    };
+    customEndpointFunctions2.aws = awsEndpointFunctions2;
+    var LambdaServiceException = class _LambdaServiceException extends ServiceException$1 {
+      constructor(options) {
+        super(options);
+        Object.setPrototypeOf(this, _LambdaServiceException.prototype);
+      }
+    };
+    var InvalidParameterValueException = class _InvalidParameterValueException extends LambdaServiceException {
+      name = "InvalidParameterValueException";
+      $fault = "client";
+      Type;
+      constructor(opts) {
+        super({
+          name: "InvalidParameterValueException",
+          $fault: "client",
+          ...opts
+        });
+        Object.setPrototypeOf(this, _InvalidParameterValueException.prototype);
+        this.Type = opts.Type;
+      }
+    };
+    var PolicyLengthExceededException = class _PolicyLengthExceededException extends LambdaServiceException {
+      name = "PolicyLengthExceededException";
+      $fault = "client";
+      Type;
+      constructor(opts) {
+        super({
+          name: "PolicyLengthExceededException",
+          $fault: "client",
+          ...opts
+        });
+        Object.setPrototypeOf(this, _PolicyLengthExceededException.prototype);
+        this.Type = opts.Type;
+      }
+    };
+    var PreconditionFailedException = class _PreconditionFailedException extends LambdaServiceException {
+      name = "PreconditionFailedException";
+      $fault = "client";
+      Type;
+      constructor(opts) {
+        super({
+          name: "PreconditionFailedException",
+          $fault: "client",
+          ...opts
+        });
+        Object.setPrototypeOf(this, _PreconditionFailedException.prototype);
+        this.Type = opts.Type;
+      }
+    };
+    var ResourceConflictException = class _ResourceConflictException extends LambdaServiceException {
+      name = "ResourceConflictException";
+      $fault = "client";
+      Type;
+      constructor(opts) {
+        super({
+          name: "ResourceConflictException",
+          $fault: "client",
+          ...opts
+        });
+        Object.setPrototypeOf(this, _ResourceConflictException.prototype);
+        this.Type = opts.Type;
+      }
+    };
+    var ResourceNotFoundException2 = class _ResourceNotFoundException extends LambdaServiceException {
+      name = "ResourceNotFoundException";
+      $fault = "client";
+      Type;
+      Message;
+      constructor(opts) {
+        super({
+          name: "ResourceNotFoundException",
+          $fault: "client",
+          ...opts
+        });
+        Object.setPrototypeOf(this, _ResourceNotFoundException.prototype);
+        this.Type = opts.Type;
+        this.Message = opts.Message;
+      }
+    };
+    var ServiceException2 = class _ServiceException extends LambdaServiceException {
+      name = "ServiceException";
+      $fault = "server";
+      Type;
+      Message;
+      constructor(opts) {
+        super({
+          name: "ServiceException",
+          $fault: "server",
+          ...opts
+        });
+        Object.setPrototypeOf(this, _ServiceException.prototype);
+        this.Type = opts.Type;
+        this.Message = opts.Message;
+      }
+    };
+    var TooManyRequestsException2 = class _TooManyRequestsException extends LambdaServiceException {
+      name = "TooManyRequestsException";
+      $fault = "client";
+      retryAfterSeconds;
+      Type;
+      Reason;
+      constructor(opts) {
+        super({
+          name: "TooManyRequestsException",
+          $fault: "client",
+          ...opts
+        });
+        Object.setPrototypeOf(this, _TooManyRequestsException.prototype);
+        this.retryAfterSeconds = opts.retryAfterSeconds;
+        this.Type = opts.Type;
+        this.Reason = opts.Reason;
+      }
+    };
+    var PublicPolicyException = class _PublicPolicyException extends LambdaServiceException {
+      name = "PublicPolicyException";
+      $fault = "client";
+      Type;
+      Message;
+      constructor(opts) {
+        super({
+          name: "PublicPolicyException",
+          $fault: "client",
+          ...opts
+        });
+        Object.setPrototypeOf(this, _PublicPolicyException.prototype);
+        this.Type = opts.Type;
+        this.Message = opts.Message;
+      }
+    };
+    var AliasLimitExceededException = class _AliasLimitExceededException extends LambdaServiceException {
+      name = "AliasLimitExceededException";
+      $fault = "client";
+      Type;
+      constructor(opts) {
+        super({
+          name: "AliasLimitExceededException",
+          $fault: "client",
+          ...opts
+        });
+        Object.setPrototypeOf(this, _AliasLimitExceededException.prototype);
+        this.Type = opts.Type;
+      }
+    };
+    var CapacityProviderLimitExceededException = class _CapacityProviderLimitExceededException extends LambdaServiceException {
+      name = "CapacityProviderLimitExceededException";
+      $fault = "client";
+      Type;
+      constructor(opts) {
+        super({
+          name: "CapacityProviderLimitExceededException",
+          $fault: "client",
+          ...opts
+        });
+        Object.setPrototypeOf(this, _CapacityProviderLimitExceededException.prototype);
+        this.Type = opts.Type;
+      }
+    };
+    var KMSAccessDeniedException = class _KMSAccessDeniedException extends LambdaServiceException {
+      name = "KMSAccessDeniedException";
+      $fault = "server";
+      Type;
+      Message;
+      constructor(opts) {
+        super({
+          name: "KMSAccessDeniedException",
+          $fault: "server",
+          ...opts
+        });
+        Object.setPrototypeOf(this, _KMSAccessDeniedException.prototype);
+        this.Type = opts.Type;
+        this.Message = opts.Message;
+      }
+    };
+    var KMSDisabledException = class _KMSDisabledException extends LambdaServiceException {
+      name = "KMSDisabledException";
+      $fault = "server";
+      Type;
+      Message;
+      constructor(opts) {
+        super({
+          name: "KMSDisabledException",
+          $fault: "server",
+          ...opts
+        });
+        Object.setPrototypeOf(this, _KMSDisabledException.prototype);
+        this.Type = opts.Type;
+        this.Message = opts.Message;
+      }
+    };
+    var KMSInvalidStateException = class _KMSInvalidStateException extends LambdaServiceException {
+      name = "KMSInvalidStateException";
+      $fault = "server";
+      Type;
+      Message;
+      constructor(opts) {
+        super({
+          name: "KMSInvalidStateException",
+          $fault: "server",
+          ...opts
+        });
+        Object.setPrototypeOf(this, _KMSInvalidStateException.prototype);
+        this.Type = opts.Type;
+        this.Message = opts.Message;
+      }
+    };
+    var KMSNotFoundException = class _KMSNotFoundException extends LambdaServiceException {
+      name = "KMSNotFoundException";
+      $fault = "server";
+      Type;
+      Message;
+      constructor(opts) {
+        super({
+          name: "KMSNotFoundException",
+          $fault: "server",
+          ...opts
+        });
+        Object.setPrototypeOf(this, _KMSNotFoundException.prototype);
+        this.Type = opts.Type;
+        this.Message = opts.Message;
+      }
+    };
+    var ResourceInUseException = class _ResourceInUseException extends LambdaServiceException {
+      name = "ResourceInUseException";
+      $fault = "client";
+      Type;
+      Message;
+      constructor(opts) {
+        super({
+          name: "ResourceInUseException",
+          $fault: "client",
+          ...opts
+        });
+        Object.setPrototypeOf(this, _ResourceInUseException.prototype);
+        this.Type = opts.Type;
+        this.Message = opts.Message;
+      }
+    };
+    var CodeSigningConfigNotFoundException = class _CodeSigningConfigNotFoundException extends LambdaServiceException {
+      name = "CodeSigningConfigNotFoundException";
+      $fault = "client";
+      Type;
+      Message;
+      constructor(opts) {
+        super({
+          name: "CodeSigningConfigNotFoundException",
+          $fault: "client",
+          ...opts
+        });
+        Object.setPrototypeOf(this, _CodeSigningConfigNotFoundException.prototype);
+        this.Type = opts.Type;
+        this.Message = opts.Message;
+      }
+    };
+    var CodeStorageExceededException = class _CodeStorageExceededException extends LambdaServiceException {
+      name = "CodeStorageExceededException";
+      $fault = "client";
+      Type;
+      constructor(opts) {
+        super({
+          name: "CodeStorageExceededException",
+          $fault: "client",
+          ...opts
+        });
+        Object.setPrototypeOf(this, _CodeStorageExceededException.prototype);
+        this.Type = opts.Type;
+      }
+    };
+    var CodeVerificationFailedException = class _CodeVerificationFailedException extends LambdaServiceException {
+      name = "CodeVerificationFailedException";
+      $fault = "client";
+      Type;
+      Message;
+      constructor(opts) {
+        super({
+          name: "CodeVerificationFailedException",
+          $fault: "client",
+          ...opts
+        });
+        Object.setPrototypeOf(this, _CodeVerificationFailedException.prototype);
+        this.Type = opts.Type;
+        this.Message = opts.Message;
+      }
+    };
+    var FunctionVersionsPerCapacityProviderLimitExceededException = class _FunctionVersionsPerCapacityProviderLimitExceededException extends LambdaServiceException {
+      name = "FunctionVersionsPerCapacityProviderLimitExceededException";
+      $fault = "client";
+      Type;
+      constructor(opts) {
+        super({
+          name: "FunctionVersionsPerCapacityProviderLimitExceededException",
+          $fault: "client",
+          ...opts
+        });
+        Object.setPrototypeOf(this, _FunctionVersionsPerCapacityProviderLimitExceededException.prototype);
+        this.Type = opts.Type;
+      }
+    };
+    var InvalidCodeSignatureException = class _InvalidCodeSignatureException extends LambdaServiceException {
+      name = "InvalidCodeSignatureException";
+      $fault = "client";
+      Type;
+      Message;
+      constructor(opts) {
+        super({
+          name: "InvalidCodeSignatureException",
+          $fault: "client",
+          ...opts
+        });
+        Object.setPrototypeOf(this, _InvalidCodeSignatureException.prototype);
+        this.Type = opts.Type;
+        this.Message = opts.Message;
+      }
+    };
+    var CodeArtifactUserDeletedException = class _CodeArtifactUserDeletedException extends LambdaServiceException {
+      name = "CodeArtifactUserDeletedException";
+      $fault = "client";
+      Type;
+      constructor(opts) {
+        super({
+          name: "CodeArtifactUserDeletedException",
+          $fault: "client",
+          ...opts
+        });
+        Object.setPrototypeOf(this, _CodeArtifactUserDeletedException.prototype);
+        this.Type = opts.Type;
+      }
+    };
+    var CodeArtifactUserFailedException = class _CodeArtifactUserFailedException extends LambdaServiceException {
+      name = "CodeArtifactUserFailedException";
+      $fault = "client";
+      Type;
+      constructor(opts) {
+        super({
+          name: "CodeArtifactUserFailedException",
+          $fault: "client",
+          ...opts
+        });
+        Object.setPrototypeOf(this, _CodeArtifactUserFailedException.prototype);
+        this.Type = opts.Type;
+      }
+    };
+    var CodeArtifactUserPendingException = class _CodeArtifactUserPendingException extends LambdaServiceException {
+      name = "CodeArtifactUserPendingException";
+      $fault = "client";
+      Type;
+      constructor(opts) {
+        super({
+          name: "CodeArtifactUserPendingException",
+          $fault: "client",
+          ...opts
+        });
+        Object.setPrototypeOf(this, _CodeArtifactUserPendingException.prototype);
+        this.Type = opts.Type;
+      }
+    };
+    var DurableExecutionAlreadyStartedException = class _DurableExecutionAlreadyStartedException extends LambdaServiceException {
+      name = "DurableExecutionAlreadyStartedException";
+      $fault = "client";
+      Type;
+      Message;
+      constructor(opts) {
+        super({
+          name: "DurableExecutionAlreadyStartedException",
+          $fault: "client",
+          ...opts
+        });
+        Object.setPrototypeOf(this, _DurableExecutionAlreadyStartedException.prototype);
+        this.Type = opts.Type;
+        this.Message = opts.Message;
+      }
+    };
+    var EC2AccessDeniedException = class _EC2AccessDeniedException extends LambdaServiceException {
+      name = "EC2AccessDeniedException";
+      $fault = "server";
+      Type;
+      Message;
+      constructor(opts) {
+        super({
+          name: "EC2AccessDeniedException",
+          $fault: "server",
+          ...opts
+        });
+        Object.setPrototypeOf(this, _EC2AccessDeniedException.prototype);
+        this.Type = opts.Type;
+        this.Message = opts.Message;
+      }
+    };
+    var EC2ThrottledException = class _EC2ThrottledException extends LambdaServiceException {
+      name = "EC2ThrottledException";
+      $fault = "server";
+      Type;
+      Message;
+      constructor(opts) {
+        super({
+          name: "EC2ThrottledException",
+          $fault: "server",
+          ...opts
+        });
+        Object.setPrototypeOf(this, _EC2ThrottledException.prototype);
+        this.Type = opts.Type;
+        this.Message = opts.Message;
+      }
+    };
+    var EC2UnexpectedException = class _EC2UnexpectedException extends LambdaServiceException {
+      name = "EC2UnexpectedException";
+      $fault = "server";
+      Type;
+      Message;
+      EC2ErrorCode;
+      constructor(opts) {
+        super({
+          name: "EC2UnexpectedException",
+          $fault: "server",
+          ...opts
+        });
+        Object.setPrototypeOf(this, _EC2UnexpectedException.prototype);
+        this.Type = opts.Type;
+        this.Message = opts.Message;
+        this.EC2ErrorCode = opts.EC2ErrorCode;
+      }
+    };
+    var EFSIOException = class _EFSIOException extends LambdaServiceException {
+      name = "EFSIOException";
+      $fault = "client";
+      Type;
+      Message;
+      constructor(opts) {
+        super({
+          name: "EFSIOException",
+          $fault: "client",
+          ...opts
+        });
+        Object.setPrototypeOf(this, _EFSIOException.prototype);
+        this.Type = opts.Type;
+        this.Message = opts.Message;
+      }
+    };
+    var EFSMountConnectivityException = class _EFSMountConnectivityException extends LambdaServiceException {
+      name = "EFSMountConnectivityException";
+      $fault = "client";
+      Type;
+      Message;
+      constructor(opts) {
+        super({
+          name: "EFSMountConnectivityException",
+          $fault: "client",
+          ...opts
+        });
+        Object.setPrototypeOf(this, _EFSMountConnectivityException.prototype);
+        this.Type = opts.Type;
+        this.Message = opts.Message;
+      }
+    };
+    var EFSMountFailureException = class _EFSMountFailureException extends LambdaServiceException {
+      name = "EFSMountFailureException";
+      $fault = "client";
+      Type;
+      Message;
+      constructor(opts) {
+        super({
+          name: "EFSMountFailureException",
+          $fault: "client",
+          ...opts
+        });
+        Object.setPrototypeOf(this, _EFSMountFailureException.prototype);
+        this.Type = opts.Type;
+        this.Message = opts.Message;
+      }
+    };
+    var EFSMountTimeoutException = class _EFSMountTimeoutException extends LambdaServiceException {
+      name = "EFSMountTimeoutException";
+      $fault = "client";
+      Type;
+      Message;
+      constructor(opts) {
+        super({
+          name: "EFSMountTimeoutException",
+          $fault: "client",
+          ...opts
+        });
+        Object.setPrototypeOf(this, _EFSMountTimeoutException.prototype);
+        this.Type = opts.Type;
+        this.Message = opts.Message;
+      }
+    };
+    var ENILimitReachedException = class _ENILimitReachedException extends LambdaServiceException {
+      name = "ENILimitReachedException";
+      $fault = "server";
+      Type;
+      Message;
+      constructor(opts) {
+        super({
+          name: "ENILimitReachedException",
+          $fault: "server",
+          ...opts
+        });
+        Object.setPrototypeOf(this, _ENILimitReachedException.prototype);
+        this.Type = opts.Type;
+        this.Message = opts.Message;
+      }
+    };
+    var ENINotReadyException = class _ENINotReadyException extends LambdaServiceException {
+      name = "ENINotReadyException";
+      $fault = "server";
+      Type;
+      Message;
+      constructor(opts) {
+        super({
+          name: "ENINotReadyException",
+          $fault: "server",
+          ...opts
+        });
+        Object.setPrototypeOf(this, _ENINotReadyException.prototype);
+        this.Type = opts.Type;
+        this.Message = opts.Message;
+      }
+    };
+    var InvalidRequestContentException = class _InvalidRequestContentException extends LambdaServiceException {
+      name = "InvalidRequestContentException";
+      $fault = "client";
+      Type;
+      constructor(opts) {
+        super({
+          name: "InvalidRequestContentException",
+          $fault: "client",
+          ...opts
+        });
+        Object.setPrototypeOf(this, _InvalidRequestContentException.prototype);
+        this.Type = opts.Type;
+      }
+    };
+    var InvalidRuntimeException = class _InvalidRuntimeException extends LambdaServiceException {
+      name = "InvalidRuntimeException";
+      $fault = "server";
+      Type;
+      Message;
+      constructor(opts) {
+        super({
+          name: "InvalidRuntimeException",
+          $fault: "server",
+          ...opts
+        });
+        Object.setPrototypeOf(this, _InvalidRuntimeException.prototype);
+        this.Type = opts.Type;
+        this.Message = opts.Message;
+      }
+    };
+    var InvalidSecurityGroupIDException = class _InvalidSecurityGroupIDException extends LambdaServiceException {
+      name = "InvalidSecurityGroupIDException";
+      $fault = "server";
+      Type;
+      Message;
+      constructor(opts) {
+        super({
+          name: "InvalidSecurityGroupIDException",
+          $fault: "server",
+          ...opts
+        });
+        Object.setPrototypeOf(this, _InvalidSecurityGroupIDException.prototype);
+        this.Type = opts.Type;
+        this.Message = opts.Message;
+      }
+    };
+    var InvalidSubnetIDException = class _InvalidSubnetIDException extends LambdaServiceException {
+      name = "InvalidSubnetIDException";
+      $fault = "server";
+      Type;
+      Message;
+      constructor(opts) {
+        super({
+          name: "InvalidSubnetIDException",
+          $fault: "server",
+          ...opts
+        });
+        Object.setPrototypeOf(this, _InvalidSubnetIDException.prototype);
+        this.Type = opts.Type;
+        this.Message = opts.Message;
+      }
+    };
+    var InvalidZipFileException = class _InvalidZipFileException extends LambdaServiceException {
+      name = "InvalidZipFileException";
+      $fault = "server";
+      Type;
+      Message;
+      constructor(opts) {
+        super({
+          name: "InvalidZipFileException",
+          $fault: "server",
+          ...opts
+        });
+        Object.setPrototypeOf(this, _InvalidZipFileException.prototype);
+        this.Type = opts.Type;
+        this.Message = opts.Message;
+      }
+    };
+    var ModeNotSupportedException = class _ModeNotSupportedException extends LambdaServiceException {
+      name = "ModeNotSupportedException";
+      $fault = "client";
+      Type;
+      constructor(opts) {
+        super({
+          name: "ModeNotSupportedException",
+          $fault: "client",
+          ...opts
+        });
+        Object.setPrototypeOf(this, _ModeNotSupportedException.prototype);
+        this.Type = opts.Type;
+      }
+    };
+    var NoPublishedVersionException = class _NoPublishedVersionException extends LambdaServiceException {
+      name = "NoPublishedVersionException";
+      $fault = "client";
+      Type;
+      Message;
+      constructor(opts) {
+        super({
+          name: "NoPublishedVersionException",
+          $fault: "client",
+          ...opts
+        });
+        Object.setPrototypeOf(this, _NoPublishedVersionException.prototype);
+        this.Type = opts.Type;
+        this.Message = opts.Message;
+      }
+    };
+    var RecursiveInvocationException = class _RecursiveInvocationException extends LambdaServiceException {
+      name = "RecursiveInvocationException";
+      $fault = "client";
+      Type;
+      Message;
+      constructor(opts) {
+        super({
+          name: "RecursiveInvocationException",
+          $fault: "client",
+          ...opts
+        });
+        Object.setPrototypeOf(this, _RecursiveInvocationException.prototype);
+        this.Type = opts.Type;
+        this.Message = opts.Message;
+      }
+    };
+    var RequestTooLargeException = class _RequestTooLargeException extends LambdaServiceException {
+      name = "RequestTooLargeException";
+      $fault = "client";
+      Type;
+      constructor(opts) {
+        super({
+          name: "RequestTooLargeException",
+          $fault: "client",
+          ...opts
+        });
+        Object.setPrototypeOf(this, _RequestTooLargeException.prototype);
+        this.Type = opts.Type;
+      }
+    };
+    var ResourceNotReadyException = class _ResourceNotReadyException extends LambdaServiceException {
+      name = "ResourceNotReadyException";
+      $fault = "server";
+      Type;
+      constructor(opts) {
+        super({
+          name: "ResourceNotReadyException",
+          $fault: "server",
+          ...opts
+        });
+        Object.setPrototypeOf(this, _ResourceNotReadyException.prototype);
+        this.Type = opts.Type;
+      }
+    };
+    var S3FilesMountConnectivityException = class _S3FilesMountConnectivityException extends LambdaServiceException {
+      name = "S3FilesMountConnectivityException";
+      $fault = "client";
+      Type;
+      Message;
+      constructor(opts) {
+        super({
+          name: "S3FilesMountConnectivityException",
+          $fault: "client",
+          ...opts
+        });
+        Object.setPrototypeOf(this, _S3FilesMountConnectivityException.prototype);
+        this.Type = opts.Type;
+        this.Message = opts.Message;
+      }
+    };
+    var S3FilesMountFailureException = class _S3FilesMountFailureException extends LambdaServiceException {
+      name = "S3FilesMountFailureException";
+      $fault = "client";
+      Type;
+      Message;
+      constructor(opts) {
+        super({
+          name: "S3FilesMountFailureException",
+          $fault: "client",
+          ...opts
+        });
+        Object.setPrototypeOf(this, _S3FilesMountFailureException.prototype);
+        this.Type = opts.Type;
+        this.Message = opts.Message;
+      }
+    };
+    var S3FilesMountTimeoutException = class _S3FilesMountTimeoutException extends LambdaServiceException {
+      name = "S3FilesMountTimeoutException";
+      $fault = "client";
+      Type;
+      Message;
+      constructor(opts) {
+        super({
+          name: "S3FilesMountTimeoutException",
+          $fault: "client",
+          ...opts
+        });
+        Object.setPrototypeOf(this, _S3FilesMountTimeoutException.prototype);
+        this.Type = opts.Type;
+        this.Message = opts.Message;
+      }
+    };
+    var SerializedRequestEntityTooLargeException = class _SerializedRequestEntityTooLargeException extends LambdaServiceException {
+      name = "SerializedRequestEntityTooLargeException";
+      $fault = "client";
+      Type;
+      constructor(opts) {
+        super({
+          name: "SerializedRequestEntityTooLargeException",
+          $fault: "client",
+          ...opts
+        });
+        Object.setPrototypeOf(this, _SerializedRequestEntityTooLargeException.prototype);
+        this.Type = opts.Type;
+      }
+    };
+    var ServiceQuotaExceededException = class _ServiceQuotaExceededException extends LambdaServiceException {
+      name = "ServiceQuotaExceededException";
+      $fault = "client";
+      Type;
+      Message;
+      constructor(opts) {
+        super({
+          name: "ServiceQuotaExceededException",
+          $fault: "client",
+          ...opts
+        });
+        Object.setPrototypeOf(this, _ServiceQuotaExceededException.prototype);
+        this.Type = opts.Type;
+        this.Message = opts.Message;
+      }
+    };
+    var SnapStartException = class _SnapStartException extends LambdaServiceException {
+      name = "SnapStartException";
+      $fault = "client";
+      Type;
+      Message;
+      constructor(opts) {
+        super({
+          name: "SnapStartException",
+          $fault: "client",
+          ...opts
+        });
+        Object.setPrototypeOf(this, _SnapStartException.prototype);
+        this.Type = opts.Type;
+        this.Message = opts.Message;
+      }
+    };
+    var SnapStartNotReadyException = class _SnapStartNotReadyException extends LambdaServiceException {
+      name = "SnapStartNotReadyException";
+      $fault = "client";
+      Type;
+      Message;
+      constructor(opts) {
+        super({
+          name: "SnapStartNotReadyException",
+          $fault: "client",
+          ...opts
+        });
+        Object.setPrototypeOf(this, _SnapStartNotReadyException.prototype);
+        this.Type = opts.Type;
+        this.Message = opts.Message;
+      }
+    };
+    var SnapStartRegenerationFailureException = class _SnapStartRegenerationFailureException extends LambdaServiceException {
+      name = "SnapStartRegenerationFailureException";
+      $fault = "client";
+      Type;
+      Message;
+      constructor(opts) {
+        super({
+          name: "SnapStartRegenerationFailureException",
+          $fault: "client",
+          ...opts
+        });
+        Object.setPrototypeOf(this, _SnapStartRegenerationFailureException.prototype);
+        this.Type = opts.Type;
+        this.Message = opts.Message;
+      }
+    };
+    var SnapStartTimeoutException = class _SnapStartTimeoutException extends LambdaServiceException {
+      name = "SnapStartTimeoutException";
+      $fault = "client";
+      Type;
+      Message;
+      constructor(opts) {
+        super({
+          name: "SnapStartTimeoutException",
+          $fault: "client",
+          ...opts
+        });
+        Object.setPrototypeOf(this, _SnapStartTimeoutException.prototype);
+        this.Type = opts.Type;
+        this.Message = opts.Message;
+      }
+    };
+    var SubnetIPAddressLimitReachedException = class _SubnetIPAddressLimitReachedException extends LambdaServiceException {
+      name = "SubnetIPAddressLimitReachedException";
+      $fault = "server";
+      Type;
+      Message;
+      constructor(opts) {
+        super({
+          name: "SubnetIPAddressLimitReachedException",
+          $fault: "server",
+          ...opts
+        });
+        Object.setPrototypeOf(this, _SubnetIPAddressLimitReachedException.prototype);
+        this.Type = opts.Type;
+        this.Message = opts.Message;
+      }
+    };
+    var UnsupportedMediaTypeException = class _UnsupportedMediaTypeException extends LambdaServiceException {
+      name = "UnsupportedMediaTypeException";
+      $fault = "client";
+      Type;
+      constructor(opts) {
+        super({
+          name: "UnsupportedMediaTypeException",
+          $fault: "client",
+          ...opts
+        });
+        Object.setPrototypeOf(this, _UnsupportedMediaTypeException.prototype);
+        this.Type = opts.Type;
+      }
+    };
+    var ProvisionedConcurrencyConfigNotFoundException = class _ProvisionedConcurrencyConfigNotFoundException extends LambdaServiceException {
+      name = "ProvisionedConcurrencyConfigNotFoundException";
+      $fault = "client";
+      Type;
+      constructor(opts) {
+        super({
+          name: "ProvisionedConcurrencyConfigNotFoundException",
+          $fault: "client",
+          ...opts
+        });
+        Object.setPrototypeOf(this, _ProvisionedConcurrencyConfigNotFoundException.prototype);
+        this.Type = opts.Type;
+      }
+    };
+    var CallbackTimeoutException = class _CallbackTimeoutException extends LambdaServiceException {
+      name = "CallbackTimeoutException";
+      $fault = "client";
+      Type;
+      Message;
+      constructor(opts) {
+        super({
+          name: "CallbackTimeoutException",
+          $fault: "client",
+          ...opts
+        });
+        Object.setPrototypeOf(this, _CallbackTimeoutException.prototype);
+        this.Type = opts.Type;
+        this.Message = opts.Message;
+      }
+    };
+    var _A2 = "Action";
+    var _AA = "AliasArn";
+    var _AC = "AliasConfiguration";
+    var _ACc = "AccessConfigs";
+    var _ACl = "AllowCredentials";
+    var _AFSC = "AppliedFunctionScalingConfig";
+    var _AH = "AllowHeaders";
+    var _AIT = "AllowedInstanceTypes";
+    var _AL = "AccountLimit";
+    var _ALEE = "AliasLimitExceededException";
+    var _ALL = "ApplicationLogLevel";
+    var _ALVP = "AddLayerVersionPermission";
+    var _ALVPR = "AddLayerVersionPermissionRequest";
+    var _ALVPRd = "AddLayerVersionPermissionResponse";
+    var _ALl = "AliasList";
+    var _AM = "AllowMethods";
+    var _AMKESC = "AmazonManagedKafkaEventSourceConfig";
+    var _AO = "AllowOrigins";
+    var _AOp = "ApplyOn";
+    var _AP = "AllowedPublishers";
+    var _APCE = "AvailableProvisionedConcurrentExecutions";
+    var _APCEl = "AllocatedProvisionedConcurrentExecutions";
+    var _APR = "AddPermissionRequest";
+    var _APRd = "AddPermissionResponse";
+    var _APd = "AddPermission";
+    var _ARC = "AliasRoutingConfiguration";
+    var _AT3 = "AuthType";
+    var _AU = "AccountUsage";
+    var _AVW = "AdditionalVersionWeights";
+    var _Al = "Aliases";
+    var _Ar = "Architectures";
+    var _Arn = "Arn";
+    var _At = "Attribute";
+    var _Att = "Attempt";
+    var _B = "Blob";
+    var _BBOFE = "BisectBatchOnFunctionError";
+    var _BOP = "BinaryOperationPayload";
+    var _BS = "BlobStream";
+    var _BSa = "BatchSize";
+    var _C2 = "Concurrency";
+    var _CA2 = "CompatibleArchitectures";
+    var _CAR = "CreateAliasRequest";
+    var _CAUDE = "CodeArtifactUserDeletedException";
+    var _CAUFE = "CodeArtifactUserFailedException";
+    var _CAUPE = "CodeArtifactUserPendingException";
+    var _CAo = "CompatibleArchitecture";
+    var _CAr = "CreateAlias";
+    var _CAu = "CurrentAttempt";
+    var _CC = "ClientContext";
+    var _CCP = "CreateCapacityProvider";
+    var _CCPR = "CreateCapacityProviderRequest";
+    var _CCPRr = "CreateCapacityProviderResponse";
+    var _CCSC = "CreateCodeSigningConfig";
+    var _CCSCR = "CreateCodeSigningConfigRequest";
+    var _CCSCRr = "CreateCodeSigningConfigResponse";
+    var _CD = "CallbackDetails";
+    var _CDE = "CheckpointDurableExecution";
+    var _CDER = "CheckpointDurableExecutionRequest";
+    var _CDERh = "CheckpointDurableExecutionResponse";
+    var _CDo = "ContextDetails";
+    var _CDr = "CreatedDate";
+    var _CE = "ConcurrentExecutions";
+    var _CESM = "CreateEventSourceMapping";
+    var _CESMR = "CreateEventSourceMappingRequest";
+    var _CF = "CreateFunction";
+    var _CFD = "CallbackFailedDetails";
+    var _CFDo = "ContextFailedDetails";
+    var _CFR = "CreateFunctionRequest";
+    var _CFUC = "CreateFunctionUrlConfig";
+    var _CFUCR = "CreateFunctionUrlConfigRequest";
+    var _CFUCRr = "CreateFunctionUrlConfigResponse";
+    var _CGI = "ConsumerGroupId";
+    var _CI = "CallbackId";
+    var _CID = "ChainedInvokeDetails";
+    var _CIFD = "ChainedInvokeFailedDetails";
+    var _CIO = "ChainedInvokeOptions";
+    var _CISD = "ChainedInvokeStartedDetails";
+    var _CISDh = "ChainedInvokeStoppedDetails";
+    var _CISDha = "ChainedInvokeSucceededDetails";
+    var _CITOD = "ChainedInvokeTimedOutDetails";
+    var _CN = "CollectionName";
+    var _CO = "CallbackOptions";
+    var _COo = "ContextOptions";
+    var _CP = "CapacityProvider";
+    var _CPA = "CapacityProviderArn";
+    var _CPC = "CapacityProviderConfig";
+    var _CPL = "CapacityProvidersList";
+    var _CPLC = "CapacityProviderLoggingConfig";
+    var _CPLEE = "CapacityProviderLimitExceededException";
+    var _CPN = "CapacityProviderName";
+    var _CPORA = "CapacityProviderOperatorRoleArn";
+    var _CPPC = "CapacityProviderPermissionsConfig";
+    var _CPSC = "CapacityProviderScalingConfig";
+    var _CPSPL = "CapacityProviderScalingPoliciesList";
+    var _CPTC = "CapacityProviderTelemetryConfig";
+    var _CPVC = "CapacityProviderVpcConfig";
+    var _CPa = "CapacityProviders";
+    var _CR = "CompatibleRuntimes";
+    var _CRo = "CompatibleRuntime";
+    var _CS2 = "CodeSize";
+    var _CSC = "CodeSigningConfig";
+    var _CSCA = "CodeSigningConfigArn";
+    var _CSCI = "CodeSigningConfigId";
+    var _CSCL = "CodeSigningConfigList";
+    var _CSCNFE = "CodeSigningConfigNotFoundException";
+    var _CSCo = "CodeSigningConfigs";
+    var _CSD = "CallbackStartedDetails";
+    var _CSDa = "CallbackSucceededDetails";
+    var _CSDo = "ContextStartedDetails";
+    var _CSDon = "ContextSucceededDetails";
+    var _CSEE = "CodeStorageExceededException";
+    var _CSP = "CodeSigningPolicies";
+    var _CSU = "CodeSizeUnzipped";
+    var _CSZ = "CodeSizeZipped";
+    var _CSo = "CodeSha256";
+    var _CSon = "ConfigSha256";
+    var _CT2 = "CheckpointToken";
+    var _CTE = "CallbackTimeoutException";
+    var _CTOD = "CallbackTimedOutDetails";
+    var _CT_ = "Content-Type";
+    var _CTl = "ClientToken";
+    var _CTr = "CreationTime";
+    var _CUES = "CheckpointUpdatedExecutionState";
+    var _CVFE = "CodeVerificationFailedException";
+    var _Co = "Cors";
+    var _Cod = "Code";
+    var _Com = "Command";
+    var _Con = "Configuration";
+    var _Cont = "Content";
+    var _D = "Description";
+    var _DA = "DeleteAlias";
+    var _DAR = "DeleteAliasRequest";
+    var _DC = "DestinationConfig";
+    var _DCP = "DeleteCapacityProvider";
+    var _DCPR = "DeleteCapacityProviderRequest";
+    var _DCPRe = "DeleteCapacityProviderResponse";
+    var _DCSC = "DeleteCodeSigningConfig";
+    var _DCSCR = "DeleteCodeSigningConfigRequest";
+    var _DCSCRe = "DeleteCodeSigningConfigResponse";
+    var _DCu = "DurableConfig";
+    var _DDBESC = "DocumentDBEventSourceConfig";
+    var _DE = "DurableExecutions";
+    var _DEA = "DurableExecutionArn";
+    var _DEASE = "DurableExecutionAlreadyStartedException";
+    var _DEN = "DurableExecutionName";
+    var _DESM = "DeleteEventSourceMapping";
+    var _DESMR = "DeleteEventSourceMappingRequest";
+    var _DF = "DeleteFunction";
+    var _DFC = "DeleteFunctionConcurrency";
+    var _DFCR = "DeleteFunctionConcurrencyRequest";
+    var _DFCSC = "DeleteFunctionCodeSigningConfig";
+    var _DFCSCR = "DeleteFunctionCodeSigningConfigRequest";
+    var _DFEIC = "DeleteFunctionEventInvokeConfig";
+    var _DFEICR = "DeleteFunctionEventInvokeConfigRequest";
+    var _DFR = "DeleteFunctionRequest";
+    var _DFRe = "DeleteFunctionResponse";
+    var _DFUC = "DeleteFunctionUrlConfig";
+    var _DFUCR = "DeleteFunctionUrlConfigRequest";
+    var _DLC = "DeadLetterConfig";
+    var _DLV = "DeleteLayerVersion";
+    var _DLVR = "DeleteLayerVersionRequest";
+    var _DN = "DatabaseName";
+    var _DPCC = "DeleteProvisionedConcurrencyConfig";
+    var _DPCCR = "DeleteProvisionedConcurrencyConfigRequest";
+    var _DR = "DryRun";
+    var _De = "Destination";
+    var _Du = "Duration";
+    var _E2 = "Error";
+    var _EC = "ErrorCode";
+    var _ECADE = "EC2AccessDeniedException";
+    var _ECEC = "EC2ErrorCode";
+    var _ECTE = "EC2ThrottledException";
+    var _ECUE = "EC2UnexpectedException";
+    var _ED = "ErrorData";
+    var _EDI = "ExecutionDataIncluded";
+    var _EDr = "ErrorDetails";
+    var _EDx = "ExecutionDetails";
+    var _EE = "EnvironmentError";
+    var _EEMGBPVC = "ExecutionEnvironmentMemoryGiBPerVCpu";
+    var _EEv = "EventError";
+    var _EFD = "ExecutionFailedDetails";
+    var _EFSIOE = "EFSIOException";
+    var _EFSMCE = "EFSMountConnectivityException";
+    var _EFSMFE = "EFSMountFailureException";
+    var _EFSMTE = "EFSMountTimeoutException";
+    var _EH = "ExposeHeaders";
+    var _EI2 = "EventId";
+    var _EIT = "ExcludedInstanceTypes";
+    var _EIv = "EventInput";
+    var _EM = "ErrorMessage";
+    var _ENILRE = "ENILimitReachedException";
+    var _ENINRE = "ENINotReadyException";
+    var _EO = "ErrorObject";
+    var _EP = "EntryPoint";
+    var _ER = "EnvironmentResponse";
+    var _ERF = "EventRecordFormat";
+    var _ERv = "EventResult";
+    var _ES = "EphemeralStorage";
+    var _ESA = "EventSourceArn";
+    var _ESD = "ExecutionStartedDetails";
+    var _ESDx = "ExecutionSucceededDetails";
+    var _ESDxe = "ExecutionStoppedDetails";
+    var _ESM = "EventSourceMappings";
+    var _ESMA = "EventSourceMappingArn";
+    var _ESMC = "EventSourceMappingConfiguration";
+    var _ESML = "EventSourceMappingsList";
+    var _ESMLC = "EventSourceMappingLoggingConfig";
+    var _ESMMC = "EventSourceMappingMetricsConfig";
+    var _EST = "EventSourceToken";
+    var _ESv = "EventStream";
+    var _ET = "ErrorType";
+    var _ETOD = "ExecutionTimedOutDetails";
+    var _ETn = "EndTimestamp";
+    var _ETv = "EventType";
+    var _ETve = "EventTimestamp";
+    var _ETx = "ExecutionTimeout";
+    var _ETxp = "ExplicitTags";
+    var _EV = "ExecutedVersion";
+    var _EVN = "EnvironmentVariableName";
+    var _EVV = "EnvironmentVariableValue";
+    var _EVn = "EnvironmentVariables";
+    var _En = "Enabled";
+    var _End = "Endpoints";
+    var _Env = "Environment";
+    var _Ev = "Event";
+    var _Eve = "Events";
+    var _Ex = "Execution";
+    var _F = "Filter";
+    var _FA = "FunctionArn";
+    var _FAu = "FunctionArns";
+    var _FC = "FunctionCount";
+    var _FCE = "FilterCriteriaError";
+    var _FCL = "FunctionCodeLocation";
+    var _FCLE = "FunctionCodeLocationError";
+    var _FCi = "FilterCriteria";
+    var _FCu = "FunctionCode";
+    var _FCun = "FunctionConfiguration";
+    var _FD = "FullDocument";
+    var _FE = "FunctionError";
+    var _FEIC = "FunctionEventInvokeConfig";
+    var _FEICL = "FunctionEventInvokeConfigList";
+    var _FEICu = "FunctionEventInvokeConfigs";
+    var _FL = "FilterList";
+    var _FLu = "FunctionList";
+    var _FN = "FunctionName";
+    var _FRT = "FunctionResponseTypes";
+    var _FS = "FunctionState";
+    var _FSC = "FileSystemConfigs";
+    var _FSCL = "FileSystemConfigList";
+    var _FSCi = "FileSystemConfig";
+    var _FSCu = "FunctionScalingConfig";
+    var _FU = "FunctionUrl";
+    var _FUAT = "FunctionUrlAuthType";
+    var _FUC = "FunctionUrlConfig";
+    var _FUCL = "FunctionUrlConfigList";
+    var _FUCu = "FunctionUrlConfigs";
+    var _FV = "FunctionVersion";
+    var _FVBCPL = "FunctionVersionsByCapacityProviderList";
+    var _FVBCPLI = "FunctionVersionsByCapacityProviderListItem";
+    var _FVPCPLEE = "FunctionVersionsPerCapacityProviderLimitExceededException";
+    var _FVu = "FunctionVersions";
+    var _Fi = "Filters";
+    var _Fu = "Functions";
+    var _GA = "GetAlias";
+    var _GAR = "GetAliasRequest";
+    var _GAS = "GetAccountSettings";
+    var _GASR = "GetAccountSettingsRequest";
+    var _GASRe = "GetAccountSettingsResponse";
+    var _GCP = "GetCapacityProvider";
+    var _GCPR = "GetCapacityProviderRequest";
+    var _GCPRe = "GetCapacityProviderResponse";
+    var _GCSC = "GetCodeSigningConfig";
+    var _GCSCR = "GetCodeSigningConfigRequest";
+    var _GCSCRe = "GetCodeSigningConfigResponse";
+    var _GDE = "GetDurableExecution";
+    var _GDEH = "GetDurableExecutionHistory";
+    var _GDEHR = "GetDurableExecutionHistoryRequest";
+    var _GDEHRe = "GetDurableExecutionHistoryResponse";
+    var _GDER = "GetDurableExecutionRequest";
+    var _GDERe = "GetDurableExecutionResponse";
+    var _GDES = "GetDurableExecutionState";
+    var _GDESR = "GetDurableExecutionStateRequest";
+    var _GDESRe = "GetDurableExecutionStateResponse";
+    var _GESM = "GetEventSourceMapping";
+    var _GESMR = "GetEventSourceMappingRequest";
+    var _GF = "GetFunction";
+    var _GFC = "GetFunctionConcurrency";
+    var _GFCR = "GetFunctionConcurrencyRequest";
+    var _GFCRe = "GetFunctionConcurrencyResponse";
+    var _GFCRet = "GetFunctionConfigurationRequest";
+    var _GFCSC = "GetFunctionCodeSigningConfig";
+    var _GFCSCR = "GetFunctionCodeSigningConfigRequest";
+    var _GFCSCRe = "GetFunctionCodeSigningConfigResponse";
+    var _GFCe = "GetFunctionConfiguration";
+    var _GFEIC = "GetFunctionEventInvokeConfig";
+    var _GFEICR = "GetFunctionEventInvokeConfigRequest";
+    var _GFR = "GetFunctionRequest";
+    var _GFRC = "GetFunctionRecursionConfig";
+    var _GFRCR = "GetFunctionRecursionConfigRequest";
+    var _GFRCRe = "GetFunctionRecursionConfigResponse";
+    var _GFRe = "GetFunctionResponse";
+    var _GFSC = "GetFunctionScalingConfig";
+    var _GFSCR = "GetFunctionScalingConfigRequest";
+    var _GFSCRe = "GetFunctionScalingConfigResponse";
+    var _GFUC = "GetFunctionUrlConfig";
+    var _GFUCR = "GetFunctionUrlConfigRequest";
+    var _GFUCRe = "GetFunctionUrlConfigResponse";
+    var _GLV = "GetLayerVersion";
+    var _GLVBA = "GetLayerVersionByArn";
+    var _GLVBAR = "GetLayerVersionByArnRequest";
+    var _GLVP = "GetLayerVersionPolicy";
+    var _GLVPR = "GetLayerVersionPolicyRequest";
+    var _GLVPRe = "GetLayerVersionPolicyResponse";
+    var _GLVR = "GetLayerVersionRequest";
+    var _GLVRe = "GetLayerVersionResponse";
+    var _GP = "GetPolicy";
+    var _GPCC = "GetProvisionedConcurrencyConfig";
+    var _GPCCR = "GetProvisionedConcurrencyConfigRequest";
+    var _GPCCRe = "GetProvisionedConcurrencyConfigResponse";
+    var _GPR = "GetPolicyRequest";
+    var _GPRe = "GetPolicyResponse";
+    var _GRMC = "GetRuntimeManagementConfig";
+    var _GRMCR = "GetRuntimeManagementConfigRequest";
+    var _GRMCRe = "GetRuntimeManagementConfigResponse";
+    var _H = "Handler";
+    var _HT = "HeartbeatTimeout";
+    var _HTS = "HeartbeatTimeoutSeconds";
+    var _I = "Input";
+    var _IA = "InvokeArgs";
+    var _IAFDS = "Ipv6AllowedForDualStack";
+    var _IAR = "InvokeAsyncRequest";
+    var _IARn = "InvokeAsyncResponse";
+    var _IAn = "InvokeAsync";
+    var _IC = "ImageConfig";
+    var _ICD = "InvocationCompletedDetails";
+    var _ICE2 = "ImageConfigError";
+    var _ICR = "ImageConfigResponse";
+    var _ICSE = "InvalidCodeSignatureException";
+    var _ICn = "InvokeComplete";
+    var _IED = "IncludeExecutionData";
+    var _IM = "InvokeMode";
+    var _IP = "InputPayload";
+    var _IPVE = "InvalidParameterValueException";
+    var _IR = "InstanceRequirements";
+    var _IRCE = "InvalidRequestContentException";
+    var _IRE3 = "InvalidRuntimeException";
+    var _IRSU = "InvokeResponseStreamUpdate";
+    var _IRn = "InvocationRequest";
+    var _IRnv = "InvocationResponse";
+    var _ISGIDE = "InvalidSecurityGroupIDException";
+    var _ISIDE = "InvalidSubnetIDException";
+    var _IT2 = "InvocationType";
+    var _IU = "ImageUri";
+    var _IVFU = "InvokedViaFunctionUrl";
+    var _IWRS = "InvokeWithResponseStream";
+    var _IWRSCE = "InvokeWithResponseStreamCompleteEvent";
+    var _IWRSR = "InvokeWithResponseStreamRequest";
+    var _IWRSRE = "InvokeWithResponseStreamResponseEvent";
+    var _IWRSRn = "InvokeWithResponseStreamResponse";
+    var _IZFE = "InvalidZipFileException";
+    var _Id = "Id";
+    var _In = "Invoke";
+    var _K2 = "Key";
+    var _KKA = "KmsKeyArn";
+    var _KMSADE = "KMSAccessDeniedException";
+    var _KMSDE = "KMSDisabledException";
+    var _KMSISE = "KMSInvalidStateException";
+    var _KMSKA = "KMSKeyArn";
+    var _KMSNFE = "KMSNotFoundException";
+    var _KSRAC = "KafkaSchemaRegistryAccessConfig";
+    var _KSRACL = "KafkaSchemaRegistryAccessConfigList";
+    var _KSRC = "KafkaSchemaRegistryConfig";
+    var _KSVC = "KafkaSchemaValidationConfig";
+    var _KSVCL = "KafkaSchemaValidationConfigList";
+    var _L = "Layers";
+    var _LA = "LayerArn";
+    var _LAR = "ListAliasesRequest";
+    var _LARi = "ListAliasesResponse";
+    var _LAi = "ListAliases";
+    var _LC = "LoggingConfig";
+    var _LCP = "ListCapacityProviders";
+    var _LCPR = "ListCapacityProvidersRequest";
+    var _LCPRi = "ListCapacityProvidersResponse";
+    var _LCSC = "ListCodeSigningConfigs";
+    var _LCSCR = "ListCodeSigningConfigsRequest";
+    var _LCSCRi = "ListCodeSigningConfigsResponse";
+    var _LDEBF = "ListDurableExecutionsByFunction";
+    var _LDEBFR = "ListDurableExecutionsByFunctionRequest";
+    var _LDEBFRi = "ListDurableExecutionsByFunctionResponse";
+    var _LESM = "ListEventSourceMappings";
+    var _LESMR = "ListEventSourceMappingsRequest";
+    var _LESMRi = "ListEventSourceMappingsResponse";
+    var _LF = "LogFormat";
+    var _LFBCSC = "ListFunctionsByCodeSigningConfig";
+    var _LFBCSCR = "ListFunctionsByCodeSigningConfigRequest";
+    var _LFBCSCRi = "ListFunctionsByCodeSigningConfigResponse";
+    var _LFEIC = "ListFunctionEventInvokeConfigs";
+    var _LFEICR = "ListFunctionEventInvokeConfigsRequest";
+    var _LFEICRi = "ListFunctionEventInvokeConfigsResponse";
+    var _LFR = "ListFunctionsRequest";
+    var _LFRi = "ListFunctionsResponse";
+    var _LFUC = "ListFunctionUrlConfigs";
+    var _LFUCR = "ListFunctionUrlConfigsRequest";
+    var _LFUCRi = "ListFunctionUrlConfigsResponse";
+    var _LFVBCP = "ListFunctionVersionsByCapacityProvider";
+    var _LFVBCPR = "ListFunctionVersionsByCapacityProviderRequest";
+    var _LFVBCPRi = "ListFunctionVersionsByCapacityProviderResponse";
+    var _LFi = "ListFunctions";
+    var _LG = "LogGroup";
+    var _LI = "LicenseInfo";
+    var _LL = "LayersList";
+    var _LLI = "LayersListItem";
+    var _LLR = "ListLayersRequest";
+    var _LLRi = "ListLayersResponse";
+    var _LLV = "ListLayerVersions";
+    var _LLVR = "ListLayerVersionsRequest";
+    var _LLVRi = "ListLayerVersionsResponse";
+    var _LLi = "ListLayers";
+    var _LM = "LastModified";
+    var _LMICPC = "LambdaManagedInstancesCapacityProviderConfig";
+    var _LMP = "LocalMountPath";
+    var _LMT = "LastModifiedTime";
+    var _LMV = "LatestMatchingVersion";
+    var _LN = "LayerName";
+    var _LPCC = "ListProvisionedConcurrencyConfigs";
+    var _LPCCR = "ListProvisionedConcurrencyConfigsRequest";
+    var _LPCCRi = "ListProvisionedConcurrencyConfigsResponse";
+    var _LPR = "LastProcessingResult";
+    var _LR = "LogResult";
+    var _LRL = "LayersReferenceList";
+    var _LT = "LogType";
+    var _LTR = "ListTagsRequest";
+    var _LTRi = "ListTagsResponse";
+    var _LTi = "ListTags";
+    var _LUS = "LastUpdateStatus";
+    var _LUSR = "LastUpdateStatusReason";
+    var _LUSRC = "LastUpdateStatusReasonCode";
+    var _LV = "LayerVersions";
+    var _LVA = "LayerVersionArn";
+    var _LVBF = "ListVersionsByFunction";
+    var _LVBFR = "ListVersionsByFunctionRequest";
+    var _LVBFRi = "ListVersionsByFunctionResponse";
+    var _LVCI = "LayerVersionContentInput";
+    var _LVCO = "LayerVersionContentOutput";
+    var _LVL = "LayerVersionsList";
+    var _LVLI = "LayerVersionsListItem";
+    var _La = "Layer";
+    var _Lo = "Location";
+    var _M = "Message";
+    var _MA = "MaxAge";
+    var _MAa = "MasterArn";
+    var _MBWIS = "MaximumBatchingWindowInSeconds";
+    var _MC = "MetricsConfig";
+    var _MCa = "MaximumConcurrency";
+    var _MEAIS = "MaximumEventAgeInSeconds";
+    var _MEE = "MinExecutionEnvironments";
+    var _MEEa = "MaxExecutionEnvironments";
+    var _MI = "MaxItems";
+    var _MNSE = "ModeNotSupportedException";
+    var _MP = "MinimumPollers";
+    var _MPa = "MaximumPollers";
+    var _MR = "MasterRegion";
+    var _MRA = "MaximumRetryAttempts";
+    var _MRAIS = "MaximumRecordAgeInSeconds";
+    var _MS = "MemorySize";
+    var _MVCC = "MaxVCpuCount";
+    var _Ma = "Marker";
+    var _Me = "Metrics";
+    var _Mo = "Mode";
+    var _N = "Name";
+    var _NADS = "NextAttemptDelaySeconds";
+    var _NAT = "NextAttemptTimestamp";
+    var _NES = "NewExecutionState";
+    var _NM = "NextMarker";
+    var _NPVE = "NoPublishedVersionException";
+    var _O = "Operations";
+    var _OF = "OnFailure";
+    var _OI = "OrganizationId";
+    var _OP = "OperationPayload";
+    var _OPu = "OutputPayload";
+    var _OS = "OnSuccess";
+    var _OSp = "OptimizationStatus";
+    var _OU = "OperationUpdate";
+    var _OUp = "OperationUpdates";
+    var _Op = "Operation";
+    var _P2 = "Principal";
+    var _PC2 = "PermissionsConfig";
+    var _PCC = "ProvisionedConcurrencyConfigs";
+    var _PCCL = "ProvisionedConcurrencyConfigList";
+    var _PCCLI = "ProvisionedConcurrencyConfigListItem";
+    var _PCCNFE = "ProvisionedConcurrencyConfigNotFoundException";
+    var _PCE = "ProvisionedConcurrentExecutions";
+    var _PCa = "PayloadChunk";
+    var _PEEMC = "PerExecutionEnvironmentMaxConcurrency";
+    var _PF = "ParallelizationFactor";
+    var _PFC = "PutFunctionConcurrency";
+    var _PFCR = "PutFunctionConcurrencyRequest";
+    var _PFCSC = "PutFunctionCodeSigningConfig";
+    var _PFCSCR = "PutFunctionCodeSigningConfigRequest";
+    var _PFCSCRu = "PutFunctionCodeSigningConfigResponse";
+    var _PFE = "PreconditionFailedException";
+    var _PFEIC = "PutFunctionEventInvokeConfig";
+    var _PFEICR = "PutFunctionEventInvokeConfigRequest";
+    var _PFRC = "PutFunctionRecursionConfig";
+    var _PFRCR = "PutFunctionRecursionConfigRequest";
+    var _PFRCRu = "PutFunctionRecursionConfigResponse";
+    var _PFSC = "PutFunctionScalingConfig";
+    var _PFSCR = "PutFunctionScalingConfigRequest";
+    var _PFSCRu = "PutFunctionScalingConfigResponse";
+    var _PGN = "PollerGroupName";
+    var _PI2 = "ParentId";
+    var _PLEE = "PolicyLengthExceededException";
+    var _PLV = "PublishLayerVersion";
+    var _PLVR = "PublishLayerVersionRequest";
+    var _PLVRu = "PublishLayerVersionResponse";
+    var _PMT = "PredefinedMetricType";
+    var _POID = "PrincipalOrgID";
+    var _PPC = "ProvisionedPollerConfig";
+    var _PPCC = "PutProvisionedConcurrencyConfig";
+    var _PPCCR = "PutProvisionedConcurrencyConfigRequest";
+    var _PPCCRu = "PutProvisionedConcurrencyConfigResponse";
+    var _PPE = "PublicPolicyException";
+    var _PRMC = "PutRuntimeManagementConfig";
+    var _PRMCR = "PutRuntimeManagementConfigRequest";
+    var _PRMCRu = "PutRuntimeManagementConfigResponse";
+    var _PT = "PropagateTags";
+    var _PTa = "PackageType";
+    var _PTu = "PublishTo";
+    var _PV = "PublishVersion";
+    var _PVR = "PublishVersionRequest";
+    var _Pa = "Payload";
+    var _Pat = "Pattern";
+    var _Po = "Policy";
+    var _Pu = "Publish";
+    var _Q = "Qualifier";
+    var _Qu = "Queues";
+    var _R = "Reason";
+    var _RA2 = "Retry-After";
+    var _RC2 = "RoutingConfig";
+    var _RCE = "ResourceConflictException";
+    var _RCEe = "ReservedConcurrentExecutions";
+    var _RCe = "ReplayChildren";
+    var _RD = "RetryDetails";
+    var _RFSC = "RequestedFunctionScalingConfig";
+    var _RI = "RevisionId";
+    var _RIE = "RecursiveInvocationException";
+    var _RIU = "ResolvedImageUri";
+    var _RIUE = "ResourceInUseException";
+    var _RIe = "RequestId";
+    var _RL = "RecursiveLoop";
+    var _RLVP = "RemoveLayerVersionPermission";
+    var _RLVPR = "RemoveLayerVersionPermissionRequest";
+    var _RNFE2 = "ResourceNotFoundException";
+    var _RNRE = "ResourceNotReadyException";
+    var _RO = "ReverseOrder";
+    var _RP = "RemovePermission";
+    var _RPCE = "RequestedProvisionedConcurrentExecutions";
+    var _RPID = "RetentionPeriodInDays";
+    var _RPR = "RemovePermissionRequest";
+    var _RSCT = "ResponseStreamContentType";
+    var _RSO = "ResolvedS3Object";
+    var _RT3 = "RepositoryType";
+    var _RTLE = "RequestTooLargeException";
+    var _RVA = "RuntimeVersionArn";
+    var _RVC = "RuntimeVersionConfig";
+    var _RVE = "RuntimeVersionError";
+    var _Re = "Result";
+    var _Res = "Resource";
+    var _Ro = "Role";
+    var _Ru = "Runtime";
+    var _S = "Statement";
+    var _SA = "SourceArn";
+    var _SAC = "SourceAccessConfigurations";
+    var _SACo = "SourceAccessConfiguration";
+    var _SAo = "SourceAccount";
+    var _SAt = "StartedAfter";
+    var _SB = "S3Bucket";
+    var _SBt = "StartedBefore";
+    var _SC = "ScalingConfig";
+    var _SCt = "StatusCode";
+    var _SD = "StepDetails";
+    var _SDE2 = "StopDurableExecution";
+    var _SDECF = "SendDurableExecutionCallbackFailure";
+    var _SDECFR = "SendDurableExecutionCallbackFailureRequest";
+    var _SDECFRe = "SendDurableExecutionCallbackFailureResponse";
+    var _SDECH = "SendDurableExecutionCallbackHeartbeat";
+    var _SDECHR = "SendDurableExecutionCallbackHeartbeatRequest";
+    var _SDECHRe = "SendDurableExecutionCallbackHeartbeatResponse";
+    var _SDECS = "SendDurableExecutionCallbackSuccess";
+    var _SDECSR = "SendDurableExecutionCallbackSuccessRequest";
+    var _SDECSRe = "SendDurableExecutionCallbackSuccessResponse";
+    var _SDER = "StopDurableExecutionRequest";
+    var _SDERt = "StopDurableExecutionResponse";
+    var _SE = "ServiceException";
+    var _SET = "ScheduledEndTimestamp";
+    var _SFD = "StepFailedDetails";
+    var _SFMCE = "S3FilesMountConnectivityException";
+    var _SFMFE = "S3FilesMountFailureException";
+    var _SFMTE = "S3FilesMountTimeoutException";
+    var _SGI = "SecurityGroupIds";
+    var _SI2 = "StatementId";
+    var _SIPALRE = "SubnetIPAddressLimitReachedException";
+    var _SIu = "SubnetIds";
+    var _SJA = "SigningJobArn";
+    var _SK = "S3Key";
+    var _SKMSKA = "SourceKMSKeyArn";
+    var _SLL = "SystemLogLevel";
+    var _SM = "ScalingMode";
+    var _SMES = "SelfManagedEventSource";
+    var _SMKESC = "SelfManagedKafkaEventSourceConfig";
+    var _SO = "StepOptions";
+    var _SOSM = "S3ObjectStorageMode";
+    var _SOV = "S3ObjectVersion";
+    var _SP = "ScalingPolicies";
+    var _SPT = "StartingPositionTimestamp";
+    var _SPVA = "SigningProfileVersionArns";
+    var _SPVAi = "SigningProfileVersionArn";
+    var _SPt = "StartingPosition";
+    var _SQEE = "ServiceQuotaExceededException";
+    var _SR = "StateReason";
+    var _SRC = "SchemaRegistryConfig";
+    var _SRCt = "StateReasonCode";
+    var _SRETLE = "SerializedRequestEntityTooLargeException";
+    var _SRURI = "SchemaRegistryURI";
+    var _SRt = "StatusReason";
+    var _SS = "SensitiveString";
+    var _SSD = "StepStartedDetails";
+    var _SSDt = "StepSucceededDetails";
+    var _SSE = "SnapStartException";
+    var _SSNRE = "SnapStartNotReadyException";
+    var _SSR = "SnapStartResponse";
+    var _SSRFE = "SnapStartRegenerationFailureException";
+    var _SSTE = "SnapStartTimeoutException";
+    var _SSn = "SnapStart";
+    var _ST2 = "StackTrace";
+    var _STE = "StackTraceEntry";
+    var _STEt = "StackTraceEntries";
+    var _STR = "StateTransitionReason";
+    var _STt = "StartTimestamp";
+    var _STto = "StopTimestamp";
+    var _STu = "SubType";
+    var _SVC = "SchemaValidationConfigs";
+    var _Si = "Size";
+    var _St = "State";
+    var _Sta = "Status";
+    var _Stat = "Statuses";
+    var _T2 = "Type";
+    var _TA = "TargetArn";
+    var _TC2 = "TelemetryConfig";
+    var _TCR = "TracingConfigResponse";
+    var _TCS = "TotalCodeSize";
+    var _TCe = "TenancyConfig";
+    var _TCr = "TracingConfig";
+    var _TE = "TagsError";
+    var _TH = "TraceHeader";
+    var _TI = "TenantId";
+    var _TIM = "TenantIsolationMode";
+    var _TK = "TagKeys";
+    var _TKL = "TagKeyList";
+    var _TMRE3 = "TooManyRequestsException";
+    var _TR = "TagResource";
+    var _TRR = "TagResourceRequest";
+    var _TS = "TimeoutSeconds";
+    var _TTSP = "TargetTrackingScalingPolicy";
+    var _TV = "TargetValue";
+    var _TWIS = "TumblingWindowInSeconds";
+    var _Ta2 = "Tags";
+    var _Ti = "Timeout";
+    var _To = "Topics";
+    var _Tr = "Truncated";
+    var _U = "Updates";
+    var _UA = "UpdateAlias";
+    var _UAOD = "UntrustedArtifactOnDeployment";
+    var _UAR = "UpdateAliasRequest";
+    var _UCE2 = "UnreservedConcurrentExecutions";
+    var _UCP = "UpdateCapacityProvider";
+    var _UCPR = "UpdateCapacityProviderRequest";
+    var _UCPRp = "UpdateCapacityProviderResponse";
+    var _UCSC = "UpdateCodeSigningConfig";
+    var _UCSCR = "UpdateCodeSigningConfigRequest";
+    var _UCSCRp = "UpdateCodeSigningConfigResponse";
+    var _UESM = "UpdateEventSourceMapping";
+    var _UESMR = "UpdateEventSourceMappingRequest";
+    var _UFC = "UpdateFunctionCode";
+    var _UFCR = "UpdateFunctionCodeRequest";
+    var _UFCRp = "UpdateFunctionConfigurationRequest";
+    var _UFCp = "UpdateFunctionConfiguration";
+    var _UFEIC = "UpdateFunctionEventInvokeConfig";
+    var _UFEICR = "UpdateFunctionEventInvokeConfigRequest";
+    var _UFUC = "UpdateFunctionUrlConfig";
+    var _UFUCR = "UpdateFunctionUrlConfigRequest";
+    var _UFUCRp = "UpdateFunctionUrlConfigResponse";
+    var _UMTE = "UnsupportedMediaTypeException";
+    var _UR = "UntagResource";
+    var _URI = "URI";
+    var _URO = "UpdateRuntimeOn";
+    var _URR = "UntagResourceRequest";
+    var _UUID = "UUID";
+    var _V2 = "Variables";
+    var _VC = "VpcConfig";
+    var _VCR = "VpcConfigResponse";
+    var _VI = "VpcId";
+    var _VN = "VersionNumber";
+    var _Ve = "Version";
+    var _Ver = "Versions";
+    var _WCD = "WaitCancelledDetails";
+    var _WD = "WorkingDirectory";
+    var _WDa = "WaitDetails";
+    var _WO = "WaitOptions";
+    var _WS = "WaitSeconds";
+    var _WSD = "WaitStartedDetails";
+    var _WSDa = "WaitSucceededDetails";
+    var _XACC = "X-Amz-Client-Context";
+    var _XADEA = "X-Amz-Durable-Execution-Arn";
+    var _XADEN = "X-Amz-Durable-Execution-Name";
+    var _XAEV = "X-Amz-Executed-Version";
+    var _XAFE = "X-Amz-Function-Error";
+    var _XAIT = "X-Amz-Invocation-Type";
+    var _XALR = "X-Amz-Log-Result";
+    var _XALT = "X-Amz-Log-Type";
+    var _XATI = "X-Amz-Tenant-Id";
+    var _XATIm = "XAmznTraceId";
+    var _ZF = "ZipFile";
+    var _c5 = "client";
+    var _e5 = "error";
+    var _eP = "eventPayload";
+    var _h4 = "http";
+    var _hE5 = "httpError";
+    var _hH2 = "httpHeader";
+    var _hQ2 = "httpQuery";
+    var _m4 = "message";
+    var _rAS = "retryAfterSeconds";
+    var _s5 = "smithy.ts.sdk.synthetic.com.amazonaws.lambda";
+    var _se3 = "server";
+    var _st = "streaming";
+    var _tK = "tagKeys";
+    var _xN = "xmlName";
+    var n05 = "com.amazonaws.lambda";
+    var _s_registry5 = TypeRegistry2.for(_s5);
+    var LambdaServiceException$ = [-3, _s5, "LambdaServiceException", 0, [], []];
+    _s_registry5.registerError(LambdaServiceException$, LambdaServiceException);
+    var n0_registry5 = TypeRegistry2.for(n05);
+    var AliasLimitExceededException$ = [
+      -3,
+      n05,
+      _ALEE,
+      { [_e5]: _c5, [_hE5]: 400 },
+      [_T2, _m4],
+      [0, 0]
+    ];
+    n0_registry5.registerError(AliasLimitExceededException$, AliasLimitExceededException);
+    var CallbackTimeoutException$ = [
+      -3,
+      n05,
+      _CTE,
+      { [_e5]: _c5, [_hE5]: 400 },
+      [_T2, _M],
+      [0, 0]
+    ];
+    n0_registry5.registerError(CallbackTimeoutException$, CallbackTimeoutException);
+    var CapacityProviderLimitExceededException$ = [
+      -3,
+      n05,
+      _CPLEE,
+      { [_e5]: _c5, [_hE5]: 400 },
+      [_T2, _m4],
+      [0, 0]
+    ];
+    n0_registry5.registerError(CapacityProviderLimitExceededException$, CapacityProviderLimitExceededException);
+    var CodeArtifactUserDeletedException$ = [
+      -3,
+      n05,
+      _CAUDE,
+      { [_e5]: _c5, [_hE5]: 409 },
+      [_T2, _m4],
+      [0, 0]
+    ];
+    n0_registry5.registerError(CodeArtifactUserDeletedException$, CodeArtifactUserDeletedException);
+    var CodeArtifactUserFailedException$ = [
+      -3,
+      n05,
+      _CAUFE,
+      { [_e5]: _c5, [_hE5]: 409 },
+      [_T2, _m4],
+      [0, 0]
+    ];
+    n0_registry5.registerError(CodeArtifactUserFailedException$, CodeArtifactUserFailedException);
+    var CodeArtifactUserPendingException$ = [
+      -3,
+      n05,
+      _CAUPE,
+      { [_e5]: _c5, [_hE5]: 409 },
+      [_T2, _m4],
+      [0, 0]
+    ];
+    n0_registry5.registerError(CodeArtifactUserPendingException$, CodeArtifactUserPendingException);
+    var CodeSigningConfigNotFoundException$ = [
+      -3,
+      n05,
+      _CSCNFE,
+      { [_e5]: _c5, [_hE5]: 404 },
+      [_T2, _M],
+      [0, 0]
+    ];
+    n0_registry5.registerError(CodeSigningConfigNotFoundException$, CodeSigningConfigNotFoundException);
+    var CodeStorageExceededException$ = [
+      -3,
+      n05,
+      _CSEE,
+      { [_e5]: _c5, [_hE5]: 400 },
+      [_T2, _m4],
+      [0, 0]
+    ];
+    n0_registry5.registerError(CodeStorageExceededException$, CodeStorageExceededException);
+    var CodeVerificationFailedException$ = [
+      -3,
+      n05,
+      _CVFE,
+      { [_e5]: _c5, [_hE5]: 400 },
+      [_T2, _M],
+      [0, 0]
+    ];
+    n0_registry5.registerError(CodeVerificationFailedException$, CodeVerificationFailedException);
+    var DurableExecutionAlreadyStartedException$ = [
+      -3,
+      n05,
+      _DEASE,
+      { [_e5]: _c5, [_hE5]: 409 },
+      [_T2, _M],
+      [0, 0]
+    ];
+    n0_registry5.registerError(DurableExecutionAlreadyStartedException$, DurableExecutionAlreadyStartedException);
+    var EC2AccessDeniedException$ = [
+      -3,
+      n05,
+      _ECADE,
+      { [_e5]: _se3, [_hE5]: 502 },
+      [_T2, _M],
+      [0, 0]
+    ];
+    n0_registry5.registerError(EC2AccessDeniedException$, EC2AccessDeniedException);
+    var EC2ThrottledException$ = [
+      -3,
+      n05,
+      _ECTE,
+      { [_e5]: _se3, [_hE5]: 502 },
+      [_T2, _M],
+      [0, 0]
+    ];
+    n0_registry5.registerError(EC2ThrottledException$, EC2ThrottledException);
+    var EC2UnexpectedException$ = [
+      -3,
+      n05,
+      _ECUE,
+      { [_e5]: _se3, [_hE5]: 502 },
+      [_T2, _M, _ECEC],
+      [0, 0, 0]
+    ];
+    n0_registry5.registerError(EC2UnexpectedException$, EC2UnexpectedException);
+    var EFSIOException$ = [
+      -3,
+      n05,
+      _EFSIOE,
+      { [_e5]: _c5, [_hE5]: 410 },
+      [_T2, _M],
+      [0, 0]
+    ];
+    n0_registry5.registerError(EFSIOException$, EFSIOException);
+    var EFSMountConnectivityException$ = [
+      -3,
+      n05,
+      _EFSMCE,
+      { [_e5]: _c5, [_hE5]: 408 },
+      [_T2, _M],
+      [0, 0]
+    ];
+    n0_registry5.registerError(EFSMountConnectivityException$, EFSMountConnectivityException);
+    var EFSMountFailureException$ = [
+      -3,
+      n05,
+      _EFSMFE,
+      { [_e5]: _c5, [_hE5]: 403 },
+      [_T2, _M],
+      [0, 0]
+    ];
+    n0_registry5.registerError(EFSMountFailureException$, EFSMountFailureException);
+    var EFSMountTimeoutException$ = [
+      -3,
+      n05,
+      _EFSMTE,
+      { [_e5]: _c5, [_hE5]: 408 },
+      [_T2, _M],
+      [0, 0]
+    ];
+    n0_registry5.registerError(EFSMountTimeoutException$, EFSMountTimeoutException);
+    var ENILimitReachedException$ = [
+      -3,
+      n05,
+      _ENILRE,
+      { [_e5]: _se3, [_hE5]: 502 },
+      [_T2, _M],
+      [0, 0]
+    ];
+    n0_registry5.registerError(ENILimitReachedException$, ENILimitReachedException);
+    var ENINotReadyException$ = [
+      -3,
+      n05,
+      _ENINRE,
+      { [_e5]: _se3, [_hE5]: 502 },
+      [_T2, _M],
+      [0, 0]
+    ];
+    n0_registry5.registerError(ENINotReadyException$, ENINotReadyException);
+    var FunctionVersionsPerCapacityProviderLimitExceededException$ = [
+      -3,
+      n05,
+      _FVPCPLEE,
+      { [_e5]: _c5, [_hE5]: 400 },
+      [_T2, _m4],
+      [0, 0]
+    ];
+    n0_registry5.registerError(FunctionVersionsPerCapacityProviderLimitExceededException$, FunctionVersionsPerCapacityProviderLimitExceededException);
+    var InvalidCodeSignatureException$ = [
+      -3,
+      n05,
+      _ICSE,
+      { [_e5]: _c5, [_hE5]: 400 },
+      [_T2, _M],
+      [0, 0]
+    ];
+    n0_registry5.registerError(InvalidCodeSignatureException$, InvalidCodeSignatureException);
+    var InvalidParameterValueException$ = [
+      -3,
+      n05,
+      _IPVE,
+      { [_e5]: _c5, [_hE5]: 400 },
+      [_T2, _m4],
+      [0, 0]
+    ];
+    n0_registry5.registerError(InvalidParameterValueException$, InvalidParameterValueException);
+    var InvalidRequestContentException$ = [
+      -3,
+      n05,
+      _IRCE,
+      { [_e5]: _c5, [_hE5]: 400 },
+      [_T2, _m4],
+      [0, 0]
+    ];
+    n0_registry5.registerError(InvalidRequestContentException$, InvalidRequestContentException);
+    var InvalidRuntimeException$ = [
+      -3,
+      n05,
+      _IRE3,
+      { [_e5]: _se3, [_hE5]: 502 },
+      [_T2, _M],
+      [0, 0]
+    ];
+    n0_registry5.registerError(InvalidRuntimeException$, InvalidRuntimeException);
+    var InvalidSecurityGroupIDException$ = [
+      -3,
+      n05,
+      _ISGIDE,
+      { [_e5]: _se3, [_hE5]: 502 },
+      [_T2, _M],
+      [0, 0]
+    ];
+    n0_registry5.registerError(InvalidSecurityGroupIDException$, InvalidSecurityGroupIDException);
+    var InvalidSubnetIDException$ = [
+      -3,
+      n05,
+      _ISIDE,
+      { [_e5]: _se3, [_hE5]: 502 },
+      [_T2, _M],
+      [0, 0]
+    ];
+    n0_registry5.registerError(InvalidSubnetIDException$, InvalidSubnetIDException);
+    var InvalidZipFileException$ = [
+      -3,
+      n05,
+      _IZFE,
+      { [_e5]: _se3, [_hE5]: 502 },
+      [_T2, _M],
+      [0, 0]
+    ];
+    n0_registry5.registerError(InvalidZipFileException$, InvalidZipFileException);
+    var KMSAccessDeniedException$ = [
+      -3,
+      n05,
+      _KMSADE,
+      { [_e5]: _se3, [_hE5]: 502 },
+      [_T2, _M],
+      [0, 0]
+    ];
+    n0_registry5.registerError(KMSAccessDeniedException$, KMSAccessDeniedException);
+    var KMSDisabledException$ = [
+      -3,
+      n05,
+      _KMSDE,
+      { [_e5]: _se3, [_hE5]: 502 },
+      [_T2, _M],
+      [0, 0]
+    ];
+    n0_registry5.registerError(KMSDisabledException$, KMSDisabledException);
+    var KMSInvalidStateException$ = [
+      -3,
+      n05,
+      _KMSISE,
+      { [_e5]: _se3, [_hE5]: 502 },
+      [_T2, _M],
+      [0, 0]
+    ];
+    n0_registry5.registerError(KMSInvalidStateException$, KMSInvalidStateException);
+    var KMSNotFoundException$ = [
+      -3,
+      n05,
+      _KMSNFE,
+      { [_e5]: _se3, [_hE5]: 502 },
+      [_T2, _M],
+      [0, 0]
+    ];
+    n0_registry5.registerError(KMSNotFoundException$, KMSNotFoundException);
+    var ModeNotSupportedException$ = [
+      -3,
+      n05,
+      _MNSE,
+      { [_e5]: _c5, [_hE5]: 400 },
+      [_T2, _m4],
+      [0, 0]
+    ];
+    n0_registry5.registerError(ModeNotSupportedException$, ModeNotSupportedException);
+    var NoPublishedVersionException$ = [
+      -3,
+      n05,
+      _NPVE,
+      { [_e5]: _c5, [_hE5]: 400 },
+      [_T2, _M],
+      [0, 0]
+    ];
+    n0_registry5.registerError(NoPublishedVersionException$, NoPublishedVersionException);
+    var PolicyLengthExceededException$ = [
+      -3,
+      n05,
+      _PLEE,
+      { [_e5]: _c5, [_hE5]: 400 },
+      [_T2, _m4],
+      [0, 0]
+    ];
+    n0_registry5.registerError(PolicyLengthExceededException$, PolicyLengthExceededException);
+    var PreconditionFailedException$ = [
+      -3,
+      n05,
+      _PFE,
+      { [_e5]: _c5, [_hE5]: 412 },
+      [_T2, _m4],
+      [0, 0]
+    ];
+    n0_registry5.registerError(PreconditionFailedException$, PreconditionFailedException);
+    var ProvisionedConcurrencyConfigNotFoundException$ = [
+      -3,
+      n05,
+      _PCCNFE,
+      { [_e5]: _c5, [_hE5]: 404 },
+      [_T2, _m4],
+      [0, 0]
+    ];
+    n0_registry5.registerError(ProvisionedConcurrencyConfigNotFoundException$, ProvisionedConcurrencyConfigNotFoundException);
+    var PublicPolicyException$ = [
+      -3,
+      n05,
+      _PPE,
+      { [_e5]: _c5, [_hE5]: 400 },
+      [_T2, _M],
+      [0, 0]
+    ];
+    n0_registry5.registerError(PublicPolicyException$, PublicPolicyException);
+    var RecursiveInvocationException$ = [
+      -3,
+      n05,
+      _RIE,
+      { [_e5]: _c5, [_hE5]: 400 },
+      [_T2, _M],
+      [0, 0]
+    ];
+    n0_registry5.registerError(RecursiveInvocationException$, RecursiveInvocationException);
+    var RequestTooLargeException$ = [
+      -3,
+      n05,
+      _RTLE,
+      { [_e5]: _c5, [_hE5]: 413 },
+      [_T2, _m4],
+      [0, 0]
+    ];
+    n0_registry5.registerError(RequestTooLargeException$, RequestTooLargeException);
+    var ResourceConflictException$ = [
+      -3,
+      n05,
+      _RCE,
+      { [_e5]: _c5, [_hE5]: 409 },
+      [_T2, _m4],
+      [0, 0]
+    ];
+    n0_registry5.registerError(ResourceConflictException$, ResourceConflictException);
+    var ResourceInUseException$ = [
+      -3,
+      n05,
+      _RIUE,
+      { [_e5]: _c5, [_hE5]: 400 },
+      [_T2, _M],
+      [0, 0]
+    ];
+    n0_registry5.registerError(ResourceInUseException$, ResourceInUseException);
+    var ResourceNotFoundException$2 = [
+      -3,
+      n05,
+      _RNFE2,
+      { [_e5]: _c5, [_hE5]: 404 },
+      [_T2, _M],
+      [0, 0]
+    ];
+    n0_registry5.registerError(ResourceNotFoundException$2, ResourceNotFoundException2);
+    var ResourceNotReadyException$ = [
+      -3,
+      n05,
+      _RNRE,
+      { [_e5]: _se3, [_hE5]: 502 },
+      [_T2, _m4],
+      [0, 0]
+    ];
+    n0_registry5.registerError(ResourceNotReadyException$, ResourceNotReadyException);
+    var S3FilesMountConnectivityException$ = [
+      -3,
+      n05,
+      _SFMCE,
+      { [_e5]: _c5, [_hE5]: 408 },
+      [_T2, _M],
+      [0, 0]
+    ];
+    n0_registry5.registerError(S3FilesMountConnectivityException$, S3FilesMountConnectivityException);
+    var S3FilesMountFailureException$ = [
+      -3,
+      n05,
+      _SFMFE,
+      { [_e5]: _c5, [_hE5]: 403 },
+      [_T2, _M],
+      [0, 0]
+    ];
+    n0_registry5.registerError(S3FilesMountFailureException$, S3FilesMountFailureException);
+    var S3FilesMountTimeoutException$ = [
+      -3,
+      n05,
+      _SFMTE,
+      { [_e5]: _c5, [_hE5]: 408 },
+      [_T2, _M],
+      [0, 0]
+    ];
+    n0_registry5.registerError(S3FilesMountTimeoutException$, S3FilesMountTimeoutException);
+    var SerializedRequestEntityTooLargeException$ = [
+      -3,
+      n05,
+      _SRETLE,
+      { [_e5]: _c5, [_hE5]: 413 },
+      [_T2, _m4],
+      [0, 0]
+    ];
+    n0_registry5.registerError(SerializedRequestEntityTooLargeException$, SerializedRequestEntityTooLargeException);
+    var ServiceException$ = [
+      -3,
+      n05,
+      _SE,
+      { [_e5]: _se3, [_hE5]: 500 },
+      [_T2, _M],
+      [0, 0]
+    ];
+    n0_registry5.registerError(ServiceException$, ServiceException2);
+    var ServiceQuotaExceededException$ = [
+      -3,
+      n05,
+      _SQEE,
+      { [_e5]: _c5, [_hE5]: 402 },
+      [_T2, _M],
+      [0, 0]
+    ];
+    n0_registry5.registerError(ServiceQuotaExceededException$, ServiceQuotaExceededException);
+    var SnapStartException$ = [
+      -3,
+      n05,
+      _SSE,
+      { [_e5]: _c5, [_hE5]: 400 },
+      [_T2, _M],
+      [0, 0]
+    ];
+    n0_registry5.registerError(SnapStartException$, SnapStartException);
+    var SnapStartNotReadyException$ = [
+      -3,
+      n05,
+      _SSNRE,
+      { [_e5]: _c5, [_hE5]: 409 },
+      [_T2, _M],
+      [0, 0]
+    ];
+    n0_registry5.registerError(SnapStartNotReadyException$, SnapStartNotReadyException);
+    var SnapStartRegenerationFailureException$ = [
+      -3,
+      n05,
+      _SSRFE,
+      { [_e5]: _c5, [_hE5]: 409 },
+      [_T2, _M],
+      [0, 0]
+    ];
+    n0_registry5.registerError(SnapStartRegenerationFailureException$, SnapStartRegenerationFailureException);
+    var SnapStartTimeoutException$ = [
+      -3,
+      n05,
+      _SSTE,
+      { [_e5]: _c5, [_hE5]: 408 },
+      [_T2, _M],
+      [0, 0]
+    ];
+    n0_registry5.registerError(SnapStartTimeoutException$, SnapStartTimeoutException);
+    var SubnetIPAddressLimitReachedException$ = [
+      -3,
+      n05,
+      _SIPALRE,
+      { [_e5]: _se3, [_hE5]: 502 },
+      [_T2, _M],
+      [0, 0]
+    ];
+    n0_registry5.registerError(SubnetIPAddressLimitReachedException$, SubnetIPAddressLimitReachedException);
+    var TooManyRequestsException$2 = [
+      -3,
+      n05,
+      _TMRE3,
+      { [_e5]: _c5, [_hE5]: 429 },
+      [_rAS, _T2, _m4, _R],
+      [[0, { [_hH2]: _RA2 }], 0, 0, 0]
+    ];
+    n0_registry5.registerError(TooManyRequestsException$2, TooManyRequestsException2);
+    var UnsupportedMediaTypeException$ = [
+      -3,
+      n05,
+      _UMTE,
+      { [_e5]: _c5, [_hE5]: 415 },
+      [_T2, _m4],
+      [0, 0]
+    ];
+    n0_registry5.registerError(UnsupportedMediaTypeException$, UnsupportedMediaTypeException);
+    var errorTypeRegistries5 = [
+      _s_registry5,
+      n0_registry5
+    ];
+    var BinaryOperationPayload = [0, n05, _BOP, 8, 21];
+    var _Blob = [0, n05, _B, 8, 21];
+    var BlobStream = [0, n05, _BS, { [_st]: 1 }, 42];
+    var EnvironmentVariableName = [0, n05, _EVN, 8, 0];
+    var EnvironmentVariableValue = [0, n05, _EVV, 8, 0];
+    var ErrorData = [0, n05, _ED, 8, 0];
+    var ErrorMessage = [0, n05, _EM, 8, 0];
+    var ErrorType = [0, n05, _ET, 8, 0];
+    var InputPayload = [0, n05, _IP, 8, 0];
+    var OperationPayload = [0, n05, _OP, 8, 0];
+    var OutputPayload = [0, n05, _OPu, 8, 0];
+    var SensitiveString = [0, n05, _SS, 8, 0];
+    var StackTraceEntry = [0, n05, _STE, 8, 0];
+    var AccountLimit$ = [
+      3,
+      n05,
+      _AL,
+      0,
+      [_TCS, _CSU, _CSZ, _CE, _UCE2],
+      [1, 1, 1, 1, 1]
+    ];
+    var AccountUsage$ = [
+      3,
+      n05,
+      _AU,
+      0,
+      [_TCS, _FC],
+      [1, 1]
+    ];
+    var AddLayerVersionPermissionRequest$ = [
+      3,
+      n05,
+      _ALVPR,
+      0,
+      [_LN, _VN, _SI2, _A2, _P2, _OI, _RI],
+      [[0, 1], [1, 1], 0, 0, 0, 0, [0, { [_hQ2]: _RI }]],
+      5
+    ];
+    var AddLayerVersionPermissionResponse$ = [
+      3,
+      n05,
+      _ALVPRd,
+      0,
+      [_S, _RI],
+      [0, 0]
+    ];
+    var AddPermissionRequest$ = [
+      3,
+      n05,
+      _APR,
+      0,
+      [_FN, _SI2, _A2, _P2, _SA, _FUAT, _IVFU, _SAo, _EST, _Q, _RI, _POID],
+      [[0, 1], 0, 0, 0, 0, 0, 2, 0, 0, [0, { [_hQ2]: _Q }], 0, 0],
+      4
+    ];
+    var AddPermissionResponse$ = [
+      3,
+      n05,
+      _APRd,
+      0,
+      [_S],
+      [0]
+    ];
+    var AliasConfiguration$ = [
+      3,
+      n05,
+      _AC,
+      0,
+      [_AA, _N, _FV, _D, _RC2, _RI],
+      [0, 0, 0, 0, () => AliasRoutingConfiguration$, 0]
+    ];
+    var AliasRoutingConfiguration$ = [
+      3,
+      n05,
+      _ARC,
+      0,
+      [_AVW],
+      [128 | 1]
+    ];
+    var AllowedPublishers$ = [
+      3,
+      n05,
+      _AP,
+      0,
+      [_SPVA],
+      [64 | 0],
+      1
+    ];
+    var AmazonManagedKafkaEventSourceConfig$ = [
+      3,
+      n05,
+      _AMKESC,
+      0,
+      [_CGI, _SRC],
+      [0, () => KafkaSchemaRegistryConfig$]
+    ];
+    var CallbackDetails$ = [
+      3,
+      n05,
+      _CD,
+      0,
+      [_CI, _Re, _E2],
+      [0, [() => OperationPayload, 0], [() => ErrorObject$, 0]]
+    ];
+    var CallbackFailedDetails$ = [
+      3,
+      n05,
+      _CFD,
+      0,
+      [_E2],
+      [[() => EventError$, 0]],
+      1
+    ];
+    var CallbackOptions$ = [
+      3,
+      n05,
+      _CO,
+      0,
+      [_TS, _HTS],
+      [1, 1]
+    ];
+    var CallbackStartedDetails$ = [
+      3,
+      n05,
+      _CSD,
+      0,
+      [_CI, _HT, _Ti],
+      [0, 1, 1],
+      1
+    ];
+    var CallbackSucceededDetails$ = [
+      3,
+      n05,
+      _CSDa,
+      0,
+      [_Re],
+      [[() => EventResult$, 0]],
+      1
+    ];
+    var CallbackTimedOutDetails$ = [
+      3,
+      n05,
+      _CTOD,
+      0,
+      [_E2],
+      [[() => EventError$, 0]],
+      1
+    ];
+    var CapacityProvider$ = [
+      3,
+      n05,
+      _CP,
+      0,
+      [_CPA, _St, _VC, _PC2, _IR, _CPSC, _KKA, _LM, _PT, _TC2],
+      [0, 0, () => CapacityProviderVpcConfig$, () => CapacityProviderPermissionsConfig$, () => InstanceRequirements$, () => CapacityProviderScalingConfig$, 0, 0, () => PropagateTags$, () => CapacityProviderTelemetryConfig$],
+      4
+    ];
+    var CapacityProviderConfig$ = [
+      3,
+      n05,
+      _CPC,
+      0,
+      [_LMICPC],
+      [() => LambdaManagedInstancesCapacityProviderConfig$],
+      1
+    ];
+    var CapacityProviderLoggingConfig$ = [
+      3,
+      n05,
+      _CPLC,
+      0,
+      [_SLL, _LG],
+      [0, 0]
+    ];
+    var CapacityProviderPermissionsConfig$ = [
+      3,
+      n05,
+      _CPPC,
+      0,
+      [_CPORA],
+      [0],
+      1
+    ];
+    var CapacityProviderScalingConfig$ = [
+      3,
+      n05,
+      _CPSC,
+      0,
+      [_MVCC, _SM, _SP],
+      [1, 0, () => CapacityProviderScalingPoliciesList]
+    ];
+    var CapacityProviderTelemetryConfig$ = [
+      3,
+      n05,
+      _CPTC,
+      0,
+      [_LC],
+      [() => CapacityProviderLoggingConfig$]
+    ];
+    var CapacityProviderVpcConfig$ = [
+      3,
+      n05,
+      _CPVC,
+      0,
+      [_SIu, _SGI],
+      [64 | 0, 64 | 0],
+      2
+    ];
+    var ChainedInvokeDetails$ = [
+      3,
+      n05,
+      _CID,
+      0,
+      [_Re, _E2],
+      [[() => OperationPayload, 0], [() => ErrorObject$, 0]]
+    ];
+    var ChainedInvokeFailedDetails$ = [
+      3,
+      n05,
+      _CIFD,
+      0,
+      [_E2],
+      [[() => EventError$, 0]],
+      1
+    ];
+    var ChainedInvokeOptions$ = [
+      3,
+      n05,
+      _CIO,
+      0,
+      [_FN, _TI],
+      [0, 0],
+      1
+    ];
+    var ChainedInvokeStartedDetails$ = [
+      3,
+      n05,
+      _CISD,
+      0,
+      [_FN, _TI, _I, _EV, _DEA],
+      [0, 0, [() => EventInput$, 0], 0, 0],
+      1
+    ];
+    var ChainedInvokeStoppedDetails$ = [
+      3,
+      n05,
+      _CISDh,
+      0,
+      [_E2],
+      [[() => EventError$, 0]],
+      1
+    ];
+    var ChainedInvokeSucceededDetails$ = [
+      3,
+      n05,
+      _CISDha,
+      0,
+      [_Re],
+      [[() => EventResult$, 0]],
+      1
+    ];
+    var ChainedInvokeTimedOutDetails$ = [
+      3,
+      n05,
+      _CITOD,
+      0,
+      [_E2],
+      [[() => EventError$, 0]],
+      1
+    ];
+    var CheckpointDurableExecutionRequest$ = [
+      3,
+      n05,
+      _CDER,
+      0,
+      [_DEA, _CT2, _U, _CTl],
+      [[0, 1], 0, [() => OperationUpdates, 0], [0, 4]],
+      2
+    ];
+    var CheckpointDurableExecutionResponse$ = [
+      3,
+      n05,
+      _CDERh,
+      0,
+      [_NES, _CT2],
+      [[() => CheckpointUpdatedExecutionState$, 0], 0],
+      1
+    ];
+    var CheckpointUpdatedExecutionState$ = [
+      3,
+      n05,
+      _CUES,
+      0,
+      [_O, _NM],
+      [[() => Operations, 0], 0]
+    ];
+    var CodeSigningConfig$ = [
+      3,
+      n05,
+      _CSC,
+      0,
+      [_CSCI, _CSCA, _AP, _CSP, _LM, _D],
+      [0, 0, () => AllowedPublishers$, () => CodeSigningPolicies$, 0, 0],
+      5
+    ];
+    var CodeSigningPolicies$ = [
+      3,
+      n05,
+      _CSP,
+      0,
+      [_UAOD],
+      [0]
+    ];
+    var Concurrency$ = [
+      3,
+      n05,
+      _C2,
+      0,
+      [_RCEe],
+      [1]
+    ];
+    var ContextDetails$ = [
+      3,
+      n05,
+      _CDo,
+      0,
+      [_RCe, _Re, _E2],
+      [2, [() => OperationPayload, 0], [() => ErrorObject$, 0]]
+    ];
+    var ContextFailedDetails$ = [
+      3,
+      n05,
+      _CFDo,
+      0,
+      [_E2],
+      [[() => EventError$, 0]],
+      1
+    ];
+    var ContextOptions$ = [
+      3,
+      n05,
+      _COo,
+      0,
+      [_RCe],
+      [2]
+    ];
+    var ContextStartedDetails$ = [
+      3,
+      n05,
+      _CSDo,
+      0,
+      [],
+      []
+    ];
+    var ContextSucceededDetails$ = [
+      3,
+      n05,
+      _CSDon,
+      0,
+      [_Re],
+      [[() => EventResult$, 0]],
+      1
+    ];
+    var Cors$ = [
+      3,
+      n05,
+      _Co,
+      0,
+      [_ACl, _AH, _AM, _AO, _EH, _MA],
+      [2, 64 | 0, 64 | 0, 64 | 0, 64 | 0, 1]
+    ];
+    var CreateAliasRequest$ = [
+      3,
+      n05,
+      _CAR,
+      0,
+      [_FN, _N, _FV, _D, _RC2],
+      [[0, 1], 0, 0, 0, () => AliasRoutingConfiguration$],
+      3
+    ];
+    var CreateCapacityProviderRequest$ = [
+      3,
+      n05,
+      _CCPR,
+      0,
+      [_CPN, _VC, _PC2, _IR, _CPSC, _KKA, _Ta2, _PT, _TC2],
+      [0, () => CapacityProviderVpcConfig$, () => CapacityProviderPermissionsConfig$, () => InstanceRequirements$, () => CapacityProviderScalingConfig$, 0, 128 | 0, () => PropagateTags$, () => CapacityProviderTelemetryConfig$],
+      3
+    ];
+    var CreateCapacityProviderResponse$ = [
+      3,
+      n05,
+      _CCPRr,
+      0,
+      [_CP],
+      [() => CapacityProvider$],
+      1
+    ];
+    var CreateCodeSigningConfigRequest$ = [
+      3,
+      n05,
+      _CCSCR,
+      0,
+      [_AP, _D, _CSP, _Ta2],
+      [() => AllowedPublishers$, 0, () => CodeSigningPolicies$, 128 | 0],
+      1
+    ];
+    var CreateCodeSigningConfigResponse$ = [
+      3,
+      n05,
+      _CCSCRr,
+      0,
+      [_CSC],
+      [() => CodeSigningConfig$],
+      1
+    ];
+    var CreateEventSourceMappingRequest$ = [
+      3,
+      n05,
+      _CESMR,
+      0,
+      [_FN, _ESA, _En, _BSa, _FCi, _KMSKA, _MC, _LC, _SC, _MBWIS, _PF, _SPt, _SPT, _DC, _MRAIS, _BBOFE, _MRA, _Ta2, _TWIS, _To, _Qu, _SAC, _SMES, _FRT, _AMKESC, _SMKESC, _DDBESC, _PPC],
+      [0, 0, 2, 1, () => FilterCriteria$, 0, () => EventSourceMappingMetricsConfig$, () => EventSourceMappingLoggingConfig$, () => ScalingConfig$, 1, 1, 0, 4, () => DestinationConfig$, 1, 2, 1, 128 | 0, 1, 64 | 0, 64 | 0, () => SourceAccessConfigurations, () => SelfManagedEventSource$, 64 | 0, () => AmazonManagedKafkaEventSourceConfig$, () => SelfManagedKafkaEventSourceConfig$, () => DocumentDBEventSourceConfig$, () => ProvisionedPollerConfig$],
+      1
+    ];
+    var CreateFunctionRequest$ = [
+      3,
+      n05,
+      _CFR,
+      0,
+      [_FN, _Ro, _Cod, _Ru, _H, _D, _Ti, _MS, _Pu, _PTu, _VC, _PTa, _DLC, _Env, _KMSKA, _TCr, _Ta2, _L, _FSC, _CSCA, _IC, _Ar, _ES, _SSn, _LC, _TCe, _CPC, _DCu],
+      [0, 0, [() => FunctionCode$, 0], 0, 0, 0, 1, 1, 2, 0, () => VpcConfig$, 0, () => DeadLetterConfig$, [() => Environment$, 0], 0, () => TracingConfig$, 128 | 0, 64 | 0, () => FileSystemConfigList, 0, () => ImageConfig$, 64 | 0, () => EphemeralStorage$, () => SnapStart$, () => LoggingConfig$, () => TenancyConfig$, () => CapacityProviderConfig$, () => DurableConfig$],
+      3
+    ];
+    var CreateFunctionUrlConfigRequest$ = [
+      3,
+      n05,
+      _CFUCR,
+      0,
+      [_FN, _AT3, _Q, _Co, _IM],
+      [[0, 1], 0, [0, { [_hQ2]: _Q }], () => Cors$, 0],
+      2
+    ];
+    var CreateFunctionUrlConfigResponse$ = [
+      3,
+      n05,
+      _CFUCRr,
+      0,
+      [_FU, _FA, _AT3, _CTr, _Co, _IM],
+      [0, 0, 0, 0, () => Cors$, 0],
+      4
+    ];
+    var DeadLetterConfig$ = [
+      3,
+      n05,
+      _DLC,
+      0,
+      [_TA],
+      [0]
+    ];
+    var DeleteAliasRequest$ = [
+      3,
+      n05,
+      _DAR,
+      0,
+      [_FN, _N],
+      [[0, 1], [0, 1]],
+      2
+    ];
+    var DeleteCapacityProviderRequest$ = [
+      3,
+      n05,
+      _DCPR,
+      0,
+      [_CPN],
+      [[0, 1]],
+      1
+    ];
+    var DeleteCapacityProviderResponse$ = [
+      3,
+      n05,
+      _DCPRe,
+      0,
+      [_CP],
+      [() => CapacityProvider$],
+      1
+    ];
+    var DeleteCodeSigningConfigRequest$ = [
+      3,
+      n05,
+      _DCSCR,
+      0,
+      [_CSCA],
+      [[0, 1]],
+      1
+    ];
+    var DeleteCodeSigningConfigResponse$ = [
+      3,
+      n05,
+      _DCSCRe,
+      0,
+      [],
+      []
+    ];
+    var DeleteEventSourceMappingRequest$ = [
+      3,
+      n05,
+      _DESMR,
+      0,
+      [_UUID],
+      [[0, 1]],
+      1
+    ];
+    var DeleteFunctionCodeSigningConfigRequest$ = [
+      3,
+      n05,
+      _DFCSCR,
+      0,
+      [_FN],
+      [[0, 1]],
+      1
+    ];
+    var DeleteFunctionConcurrencyRequest$ = [
+      3,
+      n05,
+      _DFCR,
+      0,
+      [_FN],
+      [[0, 1]],
+      1
+    ];
+    var DeleteFunctionEventInvokeConfigRequest$ = [
+      3,
+      n05,
+      _DFEICR,
+      0,
+      [_FN, _Q],
+      [[0, 1], [0, { [_hQ2]: _Q }]],
+      1
+    ];
+    var DeleteFunctionRequest$ = [
+      3,
+      n05,
+      _DFR,
+      0,
+      [_FN, _Q],
+      [[0, 1], [0, { [_hQ2]: _Q }]],
+      1
+    ];
+    var DeleteFunctionResponse$ = [
+      3,
+      n05,
+      _DFRe,
+      0,
+      [_SCt],
+      [[1, 32]]
+    ];
+    var DeleteFunctionUrlConfigRequest$ = [
+      3,
+      n05,
+      _DFUCR,
+      0,
+      [_FN, _Q],
+      [[0, 1], [0, { [_hQ2]: _Q }]],
+      1
+    ];
+    var DeleteLayerVersionRequest$ = [
+      3,
+      n05,
+      _DLVR,
+      0,
+      [_LN, _VN],
+      [[0, 1], [1, 1]],
+      2
+    ];
+    var DeleteProvisionedConcurrencyConfigRequest$ = [
+      3,
+      n05,
+      _DPCCR,
+      0,
+      [_FN, _Q],
+      [[0, 1], [0, { [_hQ2]: _Q }]],
+      2
+    ];
+    var DestinationConfig$ = [
+      3,
+      n05,
+      _DC,
+      0,
+      [_OS, _OF],
+      [() => OnSuccess$, () => OnFailure$]
+    ];
+    var DocumentDBEventSourceConfig$ = [
+      3,
+      n05,
+      _DDBESC,
+      0,
+      [_DN, _CN, _FD],
+      [0, 0, 0]
+    ];
+    var DurableConfig$ = [
+      3,
+      n05,
+      _DCu,
+      0,
+      [_KMSKA, _RPID, _ETx],
+      [0, 1, 1]
+    ];
+    var Environment$ = [
+      3,
+      n05,
+      _Env,
+      0,
+      [_V2],
+      [[() => EnvironmentVariables, 0]]
+    ];
+    var EnvironmentError$ = [
+      3,
+      n05,
+      _EE,
+      0,
+      [_EC, _M],
+      [0, [() => SensitiveString, 0]]
+    ];
+    var EnvironmentResponse$ = [
+      3,
+      n05,
+      _ER,
+      0,
+      [_V2, _E2],
+      [[() => EnvironmentVariables, 0], [() => EnvironmentError$, 0]]
+    ];
+    var EphemeralStorage$ = [
+      3,
+      n05,
+      _ES,
+      0,
+      [_Si],
+      [1],
+      1
+    ];
+    var ErrorObject$ = [
+      3,
+      n05,
+      _EO,
+      0,
+      [_EM, _ET, _ED, _ST2],
+      [[() => ErrorMessage, 0], [() => ErrorType, 0], [() => ErrorData, 0], [() => StackTraceEntries, 0]]
+    ];
+    var Event$ = [
+      3,
+      n05,
+      _Ev,
+      0,
+      [_ETv, _STu, _EI2, _Id, _N, _ETve, _PI2, _ESD, _ESDx, _EFD, _ETOD, _ESDxe, _CSDo, _CSDon, _CFDo, _WSD, _WSDa, _WCD, _SSD, _SSDt, _SFD, _CISD, _CISDha, _CIFD, _CITOD, _CISDh, _CSD, _CSDa, _CFD, _CTOD, _ICD],
+      [0, 0, 1, 0, 0, 4, 0, [() => ExecutionStartedDetails$, 0], [() => ExecutionSucceededDetails$, 0], [() => ExecutionFailedDetails$, 0], [() => ExecutionTimedOutDetails$, 0], [() => ExecutionStoppedDetails$, 0], () => ContextStartedDetails$, [() => ContextSucceededDetails$, 0], [() => ContextFailedDetails$, 0], () => WaitStartedDetails$, () => WaitSucceededDetails$, [() => WaitCancelledDetails$, 0], () => StepStartedDetails$, [() => StepSucceededDetails$, 0], [() => StepFailedDetails$, 0], [() => ChainedInvokeStartedDetails$, 0], [() => ChainedInvokeSucceededDetails$, 0], [() => ChainedInvokeFailedDetails$, 0], [() => ChainedInvokeTimedOutDetails$, 0], [() => ChainedInvokeStoppedDetails$, 0], () => CallbackStartedDetails$, [() => CallbackSucceededDetails$, 0], [() => CallbackFailedDetails$, 0], [() => CallbackTimedOutDetails$, 0], [() => InvocationCompletedDetails$, 0]]
+    ];
+    var EventError$ = [
+      3,
+      n05,
+      _EEv,
+      0,
+      [_Pa, _Tr],
+      [[() => ErrorObject$, 0], 2]
+    ];
+    var EventInput$ = [
+      3,
+      n05,
+      _EIv,
+      0,
+      [_Pa, _Tr],
+      [[() => InputPayload, 0], 2]
+    ];
+    var EventResult$ = [
+      3,
+      n05,
+      _ERv,
+      0,
+      [_Pa, _Tr],
+      [[() => OperationPayload, 0], 2]
+    ];
+    var EventSourceMappingConfiguration$ = [
+      3,
+      n05,
+      _ESMC,
+      0,
+      [_UUID, _SPt, _SPT, _BSa, _MBWIS, _PF, _ESA, _FCi, _FCE, _KMSKA, _MC, _LC, _SC, _FA, _LM, _LPR, _St, _STR, _DC, _To, _Qu, _SAC, _SMES, _MRAIS, _BBOFE, _MRA, _TWIS, _FRT, _AMKESC, _SMKESC, _DDBESC, _ESMA, _PPC],
+      [0, 0, 4, 1, 1, 1, 0, () => FilterCriteria$, () => FilterCriteriaError$, 0, () => EventSourceMappingMetricsConfig$, () => EventSourceMappingLoggingConfig$, () => ScalingConfig$, 0, 4, 0, 0, 0, () => DestinationConfig$, 64 | 0, 64 | 0, () => SourceAccessConfigurations, () => SelfManagedEventSource$, 1, 2, 1, 1, 64 | 0, () => AmazonManagedKafkaEventSourceConfig$, () => SelfManagedKafkaEventSourceConfig$, () => DocumentDBEventSourceConfig$, 0, () => ProvisionedPollerConfig$]
+    ];
+    var EventSourceMappingLoggingConfig$ = [
+      3,
+      n05,
+      _ESMLC,
+      0,
+      [_SLL],
+      [0]
+    ];
+    var EventSourceMappingMetricsConfig$ = [
+      3,
+      n05,
+      _ESMMC,
+      0,
+      [_Me],
+      [64 | 0]
+    ];
+    var Execution$ = [
+      3,
+      n05,
+      _Ex,
+      0,
+      [_DEA, _DEN, _FA, _Sta, _STt, _ETn, _KMSKA],
+      [0, 0, 0, 0, 4, 4, 0],
+      5
+    ];
+    var ExecutionDetails$ = [
+      3,
+      n05,
+      _EDx,
+      0,
+      [_IP],
+      [[() => InputPayload, 0]]
+    ];
+    var ExecutionFailedDetails$ = [
+      3,
+      n05,
+      _EFD,
+      0,
+      [_E2],
+      [[() => EventError$, 0]],
+      1
+    ];
+    var ExecutionStartedDetails$ = [
+      3,
+      n05,
+      _ESD,
+      0,
+      [_I, _ETx],
+      [[() => EventInput$, 0], 1],
+      2
+    ];
+    var ExecutionStoppedDetails$ = [
+      3,
+      n05,
+      _ESDxe,
+      0,
+      [_E2],
+      [[() => EventError$, 0]],
+      1
+    ];
+    var ExecutionSucceededDetails$ = [
+      3,
+      n05,
+      _ESDx,
+      0,
+      [_Re],
+      [[() => EventResult$, 0]],
+      1
+    ];
+    var ExecutionTimedOutDetails$ = [
+      3,
+      n05,
+      _ETOD,
+      0,
+      [_E2],
+      [[() => EventError$, 0]]
+    ];
+    var FileSystemConfig$ = [
+      3,
+      n05,
+      _FSCi,
+      0,
+      [_Arn, _LMP],
+      [0, 0],
+      2
+    ];
+    var Filter$ = [
+      3,
+      n05,
+      _F,
+      0,
+      [_Pat],
+      [0]
+    ];
+    var FilterCriteria$ = [
+      3,
+      n05,
+      _FCi,
+      0,
+      [_Fi],
+      [() => FilterList]
+    ];
+    var FilterCriteriaError$ = [
+      3,
+      n05,
+      _FCE,
+      0,
+      [_EC, _M],
+      [0, 0]
+    ];
+    var FunctionCode$ = [
+      3,
+      n05,
+      _FCu,
+      0,
+      [_ZF, _SB, _SK, _SOV, _SOSM, _IU, _SKMSKA],
+      [[() => _Blob, 0], 0, 0, 0, 0, 0, 0]
+    ];
+    var FunctionCodeLocation$ = [
+      3,
+      n05,
+      _FCL,
+      0,
+      [_RT3, _Lo, _IU, _RIU, _RSO, _SKMSKA, _E2],
+      [0, 0, 0, 0, () => ResolvedS3Object$, 0, [() => FunctionCodeLocationError$, 0]]
+    ];
+    var FunctionCodeLocationError$ = [
+      3,
+      n05,
+      _FCLE,
+      0,
+      [_EC, _M],
+      [0, [() => SensitiveString, 0]]
+    ];
+    var FunctionConfiguration$ = [
+      3,
+      n05,
+      _FCun,
+      0,
+      [_FN, _FA, _Ru, _Ro, _H, _CS2, _D, _Ti, _MS, _LM, _CSo, _Ve, _VC, _DLC, _Env, _KMSKA, _TCr, _MAa, _RI, _L, _St, _SR, _SRCt, _LUS, _LUSR, _LUSRC, _FSC, _SPVAi, _SJA, _PTa, _ICR, _Ar, _ES, _SSn, _RVC, _LC, _TCe, _CPC, _CSon, _DCu],
+      [0, 0, 0, 0, 0, 1, 0, 1, 1, 0, 0, 0, () => VpcConfigResponse$, () => DeadLetterConfig$, [() => EnvironmentResponse$, 0], 0, () => TracingConfigResponse$, 0, 0, () => LayersReferenceList, 0, 0, 0, 0, 0, 0, () => FileSystemConfigList, 0, 0, 0, [() => ImageConfigResponse$, 0], 64 | 0, () => EphemeralStorage$, () => SnapStartResponse$, [() => RuntimeVersionConfig$, 0], () => LoggingConfig$, () => TenancyConfig$, () => CapacityProviderConfig$, 0, () => DurableConfig$]
+    ];
+    var FunctionEventInvokeConfig$ = [
+      3,
+      n05,
+      _FEIC,
+      0,
+      [_LM, _FA, _MRA, _MEAIS, _DC],
+      [4, 0, 1, 1, () => DestinationConfig$]
+    ];
+    var FunctionScalingConfig$ = [
+      3,
+      n05,
+      _FSCu,
+      0,
+      [_MEE, _MEEa],
+      [1, 1]
+    ];
+    var FunctionUrlConfig$ = [
+      3,
+      n05,
+      _FUC,
+      0,
+      [_FU, _FA, _CTr, _LMT, _AT3, _Co, _IM],
+      [0, 0, 0, 0, 0, () => Cors$, 0],
+      5
+    ];
+    var FunctionVersionsByCapacityProviderListItem$ = [
+      3,
+      n05,
+      _FVBCPLI,
+      0,
+      [_FA, _St],
+      [0, 0],
+      2
+    ];
+    var GetAccountSettingsRequest$ = [
+      3,
+      n05,
+      _GASR,
+      0,
+      [],
+      []
+    ];
+    var GetAccountSettingsResponse$ = [
+      3,
+      n05,
+      _GASRe,
+      0,
+      [_AL, _AU],
+      [() => AccountLimit$, () => AccountUsage$]
+    ];
+    var GetAliasRequest$ = [
+      3,
+      n05,
+      _GAR,
+      0,
+      [_FN, _N],
+      [[0, 1], [0, 1]],
+      2
+    ];
+    var GetCapacityProviderRequest$ = [
+      3,
+      n05,
+      _GCPR,
+      0,
+      [_CPN],
+      [[0, 1]],
+      1
+    ];
+    var GetCapacityProviderResponse$ = [
+      3,
+      n05,
+      _GCPRe,
+      0,
+      [_CP],
+      [() => CapacityProvider$],
+      1
+    ];
+    var GetCodeSigningConfigRequest$ = [
+      3,
+      n05,
+      _GCSCR,
+      0,
+      [_CSCA],
+      [[0, 1]],
+      1
+    ];
+    var GetCodeSigningConfigResponse$ = [
+      3,
+      n05,
+      _GCSCRe,
+      0,
+      [_CSC],
+      [() => CodeSigningConfig$],
+      1
+    ];
+    var GetDurableExecutionHistoryRequest$ = [
+      3,
+      n05,
+      _GDEHR,
+      0,
+      [_DEA, _IED, _MI, _Ma, _RO],
+      [[0, 1], [2, { [_hQ2]: _IED }], [1, { [_hQ2]: _MI }], [0, { [_hQ2]: _Ma }], [2, { [_hQ2]: _RO }]],
+      1
+    ];
+    var GetDurableExecutionHistoryResponse$ = [
+      3,
+      n05,
+      _GDEHRe,
+      0,
+      [_Eve, _NM],
+      [[() => Events, 0], 0],
+      1
+    ];
+    var GetDurableExecutionRequest$ = [
+      3,
+      n05,
+      _GDER,
+      0,
+      [_DEA, _IED],
+      [[0, 1], [2, { [_hQ2]: _IED }]],
+      1
+    ];
+    var GetDurableExecutionResponse$ = [
+      3,
+      n05,
+      _GDERe,
+      0,
+      [_DEA, _DEN, _FA, _STt, _Sta, _IP, _Re, _E2, _ETn, _Ve, _TH, _EDI, _DCu],
+      [0, 0, 0, 4, 0, [() => InputPayload, 0], [() => OutputPayload, 0], [() => ErrorObject$, 0], 4, 0, () => TraceHeader$, 2, () => DurableConfig$],
+      5
+    ];
+    var GetDurableExecutionStateRequest$ = [
+      3,
+      n05,
+      _GDESR,
+      0,
+      [_DEA, _CT2, _Ma, _MI],
+      [[0, 1], [0, { [_hQ2]: _CT2 }], [0, { [_hQ2]: _Ma }], [1, { [_hQ2]: _MI }]],
+      2
+    ];
+    var GetDurableExecutionStateResponse$ = [
+      3,
+      n05,
+      _GDESRe,
+      0,
+      [_O, _NM],
+      [[() => Operations, 0], 0],
+      1
+    ];
+    var GetEventSourceMappingRequest$ = [
+      3,
+      n05,
+      _GESMR,
+      0,
+      [_UUID],
+      [[0, 1]],
+      1
+    ];
+    var GetFunctionCodeSigningConfigRequest$ = [
+      3,
+      n05,
+      _GFCSCR,
+      0,
+      [_FN],
+      [[0, 1]],
+      1
+    ];
+    var GetFunctionCodeSigningConfigResponse$ = [
+      3,
+      n05,
+      _GFCSCRe,
+      0,
+      [_CSCA, _FN],
+      [0, 0],
+      2
+    ];
+    var GetFunctionConcurrencyRequest$ = [
+      3,
+      n05,
+      _GFCR,
+      0,
+      [_FN],
+      [[0, 1]],
+      1
+    ];
+    var GetFunctionConcurrencyResponse$ = [
+      3,
+      n05,
+      _GFCRe,
+      0,
+      [_RCEe],
+      [1]
+    ];
+    var GetFunctionConfigurationRequest$ = [
+      3,
+      n05,
+      _GFCRet,
+      0,
+      [_FN, _Q],
+      [[0, 1], [0, { [_hQ2]: _Q }]],
+      1
+    ];
+    var GetFunctionEventInvokeConfigRequest$ = [
+      3,
+      n05,
+      _GFEICR,
+      0,
+      [_FN, _Q],
+      [[0, 1], [0, { [_hQ2]: _Q }]],
+      1
+    ];
+    var GetFunctionRecursionConfigRequest$ = [
+      3,
+      n05,
+      _GFRCR,
+      0,
+      [_FN],
+      [[0, 1]],
+      1
+    ];
+    var GetFunctionRecursionConfigResponse$ = [
+      3,
+      n05,
+      _GFRCRe,
+      0,
+      [_RL],
+      [0]
+    ];
+    var GetFunctionRequest$ = [
+      3,
+      n05,
+      _GFR,
+      0,
+      [_FN, _Q],
+      [[0, 1], [0, { [_hQ2]: _Q }]],
+      1
+    ];
+    var GetFunctionResponse$ = [
+      3,
+      n05,
+      _GFRe,
+      0,
+      [_Con, _Cod, _Ta2, _TE, _C2],
+      [[() => FunctionConfiguration$, 0], [() => FunctionCodeLocation$, 0], 128 | 0, () => TagsError$, () => Concurrency$]
+    ];
+    var GetFunctionScalingConfigRequest$ = [
+      3,
+      n05,
+      _GFSCR,
+      0,
+      [_FN, _Q],
+      [[0, 1], [0, { [_hQ2]: _Q }]],
+      2
+    ];
+    var GetFunctionScalingConfigResponse$ = [
+      3,
+      n05,
+      _GFSCRe,
+      0,
+      [_FA, _AFSC, _RFSC],
+      [0, () => FunctionScalingConfig$, () => FunctionScalingConfig$]
+    ];
+    var GetFunctionUrlConfigRequest$ = [
+      3,
+      n05,
+      _GFUCR,
+      0,
+      [_FN, _Q],
+      [[0, 1], [0, { [_hQ2]: _Q }]],
+      1
+    ];
+    var GetFunctionUrlConfigResponse$ = [
+      3,
+      n05,
+      _GFUCRe,
+      0,
+      [_FU, _FA, _AT3, _CTr, _LMT, _Co, _IM],
+      [0, 0, 0, 0, 0, () => Cors$, 0],
+      5
+    ];
+    var GetLayerVersionByArnRequest$ = [
+      3,
+      n05,
+      _GLVBAR,
+      0,
+      [_Arn],
+      [[0, { [_hQ2]: _Arn }]],
+      1
+    ];
+    var GetLayerVersionPolicyRequest$ = [
+      3,
+      n05,
+      _GLVPR,
+      0,
+      [_LN, _VN],
+      [[0, 1], [1, 1]],
+      2
+    ];
+    var GetLayerVersionPolicyResponse$ = [
+      3,
+      n05,
+      _GLVPRe,
+      0,
+      [_Po, _RI],
+      [0, 0]
+    ];
+    var GetLayerVersionRequest$ = [
+      3,
+      n05,
+      _GLVR,
+      0,
+      [_LN, _VN],
+      [[0, 1], [1, 1]],
+      2
+    ];
+    var GetLayerVersionResponse$ = [
+      3,
+      n05,
+      _GLVRe,
+      0,
+      [_Cont, _LA, _LVA, _D, _CDr, _Ve, _CA2, _CR, _LI],
+      [() => LayerVersionContentOutput$, 0, 0, 0, 0, 1, 64 | 0, 64 | 0, 0]
+    ];
+    var GetPolicyRequest$ = [
+      3,
+      n05,
+      _GPR,
+      0,
+      [_FN, _Q],
+      [[0, 1], [0, { [_hQ2]: _Q }]],
+      1
+    ];
+    var GetPolicyResponse$ = [
+      3,
+      n05,
+      _GPRe,
+      0,
+      [_Po, _RI],
+      [0, 0]
+    ];
+    var GetProvisionedConcurrencyConfigRequest$ = [
+      3,
+      n05,
+      _GPCCR,
+      0,
+      [_FN, _Q],
+      [[0, 1], [0, { [_hQ2]: _Q }]],
+      2
+    ];
+    var GetProvisionedConcurrencyConfigResponse$ = [
+      3,
+      n05,
+      _GPCCRe,
+      0,
+      [_RPCE, _APCE, _APCEl, _Sta, _SRt, _LM],
+      [1, 1, 1, 0, 0, 0]
+    ];
+    var GetRuntimeManagementConfigRequest$ = [
+      3,
+      n05,
+      _GRMCR,
+      0,
+      [_FN, _Q],
+      [[0, 1], [0, { [_hQ2]: _Q }]],
+      1
+    ];
+    var GetRuntimeManagementConfigResponse$ = [
+      3,
+      n05,
+      _GRMCRe,
+      0,
+      [_URO, _FA, _RVA],
+      [0, 0, 0]
+    ];
+    var ImageConfig$ = [
+      3,
+      n05,
+      _IC,
+      0,
+      [_EP, _Com, _WD],
+      [64 | 0, 64 | 0, 0]
+    ];
+    var ImageConfigError$ = [
+      3,
+      n05,
+      _ICE2,
+      0,
+      [_EC, _M],
+      [0, [() => SensitiveString, 0]]
+    ];
+    var ImageConfigResponse$ = [
+      3,
+      n05,
+      _ICR,
+      0,
+      [_IC, _E2],
+      [() => ImageConfig$, [() => ImageConfigError$, 0]]
+    ];
+    var InstanceRequirements$ = [
+      3,
+      n05,
+      _IR,
+      0,
+      [_Ar, _AIT, _EIT],
+      [64 | 0, 64 | 0, 64 | 0]
+    ];
+    var InvocationCompletedDetails$ = [
+      3,
+      n05,
+      _ICD,
+      0,
+      [_STt, _ETn, _RIe, _E2],
+      [4, 4, 0, [() => EventError$, 0]],
+      3
+    ];
+    var InvocationRequest$ = [
+      3,
+      n05,
+      _IRn,
+      0,
+      [_FN, _IT2, _LT, _CC, _DEN, _Pa, _Q, _TI],
+      [[0, 1], [0, { [_hH2]: _XAIT }], [0, { [_hH2]: _XALT }], [0, { [_hH2]: _XACC }], [0, { [_hH2]: _XADEN }], [() => _Blob, 16], [0, { [_hQ2]: _Q }], [0, { [_hH2]: _XATI }]],
+      1
+    ];
+    var InvocationResponse$ = [
+      3,
+      n05,
+      _IRnv,
+      0,
+      [_SCt, _FE, _LR, _Pa, _EV, _DEA],
+      [[1, 32], [0, { [_hH2]: _XAFE }], [0, { [_hH2]: _XALR }], [() => _Blob, 16], [0, { [_hH2]: _XAEV }], [0, { [_hH2]: _XADEA }]]
+    ];
+    var InvokeAsyncRequest$ = [
+      3,
+      n05,
+      _IAR,
+      0,
+      [_FN, _IA],
+      [[0, 1], [() => BlobStream, 16]],
+      2
+    ];
+    var InvokeAsyncResponse$ = [
+      3,
+      n05,
+      _IARn,
+      0,
+      [_Sta],
+      [[1, 32]]
+    ];
+    var InvokeResponseStreamUpdate$ = [
+      3,
+      n05,
+      _IRSU,
+      0,
+      [_Pa],
+      [[() => _Blob, { [_eP]: 1 }]]
+    ];
+    var InvokeWithResponseStreamCompleteEvent$ = [
+      3,
+      n05,
+      _IWRSCE,
+      0,
+      [_EC, _EDr, _LR],
+      [0, 0, 0]
+    ];
+    var InvokeWithResponseStreamRequest$ = [
+      3,
+      n05,
+      _IWRSR,
+      0,
+      [_FN, _LT, _CC, _Q, _Pa, _TI, _IT2],
+      [[0, 1], [0, { [_hH2]: _XALT }], [0, { [_hH2]: _XACC }], [0, { [_hQ2]: _Q }], [() => _Blob, 16], [0, { [_hH2]: _XATI }], [0, { [_hH2]: _XAIT }]],
+      1
+    ];
+    var InvokeWithResponseStreamResponse$ = [
+      3,
+      n05,
+      _IWRSRn,
+      0,
+      [_SCt, _EV, _ESv, _RSCT],
+      [[1, 32], [0, { [_hH2]: _XAEV }], [() => InvokeWithResponseStreamResponseEvent$, 16], [0, { [_hH2]: _CT_ }]]
+    ];
+    var KafkaSchemaRegistryAccessConfig$ = [
+      3,
+      n05,
+      _KSRAC,
+      0,
+      [_T2, _URI],
+      [0, 0]
+    ];
+    var KafkaSchemaRegistryConfig$ = [
+      3,
+      n05,
+      _KSRC,
+      0,
+      [_SRURI, _ERF, _ACc, _SVC],
+      [0, 0, () => KafkaSchemaRegistryAccessConfigList, () => KafkaSchemaValidationConfigList]
+    ];
+    var KafkaSchemaValidationConfig$ = [
+      3,
+      n05,
+      _KSVC,
+      0,
+      [_At],
+      [0]
+    ];
+    var LambdaManagedInstancesCapacityProviderConfig$ = [
+      3,
+      n05,
+      _LMICPC,
+      0,
+      [_CPA, _PEEMC, _EEMGBPVC],
+      [0, 1, 1],
+      1
+    ];
+    var Layer$ = [
+      3,
+      n05,
+      _La,
+      0,
+      [_Arn, _CS2, _SPVAi, _SJA],
+      [0, 1, 0, 0]
+    ];
+    var LayersListItem$ = [
+      3,
+      n05,
+      _LLI,
+      0,
+      [_LN, _LA, _LMV],
+      [0, 0, () => LayerVersionsListItem$]
+    ];
+    var LayerVersionContentInput$ = [
+      3,
+      n05,
+      _LVCI,
+      0,
+      [_SB, _SK, _SOV, _SOSM, _ZF],
+      [0, 0, 0, 0, [() => _Blob, 0]]
+    ];
+    var LayerVersionContentOutput$ = [
+      3,
+      n05,
+      _LVCO,
+      0,
+      [_Lo, _CSo, _CS2, _SPVAi, _SJA, _RSO],
+      [0, 0, 1, 0, 0, () => ResolvedS3Object$]
+    ];
+    var LayerVersionsListItem$ = [
+      3,
+      n05,
+      _LVLI,
+      0,
+      [_LVA, _Ve, _D, _CDr, _CA2, _CR, _LI],
+      [0, 1, 0, 0, 64 | 0, 64 | 0, 0]
+    ];
+    var ListAliasesRequest$ = [
+      3,
+      n05,
+      _LAR,
+      0,
+      [_FN, _FV, _Ma, _MI],
+      [[0, 1], [0, { [_hQ2]: _FV }], [0, { [_hQ2]: _Ma }], [1, { [_hQ2]: _MI }]],
+      1
+    ];
+    var ListAliasesResponse$ = [
+      3,
+      n05,
+      _LARi,
+      0,
+      [_NM, _Al],
+      [0, () => AliasList]
+    ];
+    var ListCapacityProvidersRequest$ = [
+      3,
+      n05,
+      _LCPR,
+      0,
+      [_St, _Ma, _MI],
+      [[0, { [_hQ2]: _St }], [0, { [_hQ2]: _Ma }], [1, { [_hQ2]: _MI }]]
+    ];
+    var ListCapacityProvidersResponse$ = [
+      3,
+      n05,
+      _LCPRi,
+      0,
+      [_CPa, _NM],
+      [() => CapacityProvidersList, 0],
+      1
+    ];
+    var ListCodeSigningConfigsRequest$ = [
+      3,
+      n05,
+      _LCSCR,
+      0,
+      [_Ma, _MI],
+      [[0, { [_hQ2]: _Ma }], [1, { [_hQ2]: _MI }]]
+    ];
+    var ListCodeSigningConfigsResponse$ = [
+      3,
+      n05,
+      _LCSCRi,
+      0,
+      [_NM, _CSCo],
+      [0, () => CodeSigningConfigList]
+    ];
+    var ListDurableExecutionsByFunctionRequest$ = [
+      3,
+      n05,
+      _LDEBFR,
+      0,
+      [_FN, _Q, _DEN, _Stat, _SAt, _SBt, _RO, _Ma, _MI],
+      [[0, 1], [0, { [_hQ2]: _Q }], [0, { [_hQ2]: _DEN }], [64 | 0, { [_hQ2]: _Stat }], [4, { [_hQ2]: _SAt }], [4, { [_hQ2]: _SBt }], [2, { [_hQ2]: _RO }], [0, { [_hQ2]: _Ma }], [1, { [_hQ2]: _MI }]],
+      1
+    ];
+    var ListDurableExecutionsByFunctionResponse$ = [
+      3,
+      n05,
+      _LDEBFRi,
+      0,
+      [_DE, _NM],
+      [() => DurableExecutions, 0]
+    ];
+    var ListEventSourceMappingsRequest$ = [
+      3,
+      n05,
+      _LESMR,
+      0,
+      [_ESA, _FN, _Ma, _MI],
+      [[0, { [_hQ2]: _ESA }], [0, { [_hQ2]: _FN }], [0, { [_hQ2]: _Ma }], [1, { [_hQ2]: _MI }]]
+    ];
+    var ListEventSourceMappingsResponse$ = [
+      3,
+      n05,
+      _LESMRi,
+      0,
+      [_NM, _ESM],
+      [0, () => EventSourceMappingsList]
+    ];
+    var ListFunctionEventInvokeConfigsRequest$ = [
+      3,
+      n05,
+      _LFEICR,
+      0,
+      [_FN, _Ma, _MI],
+      [[0, 1], [0, { [_hQ2]: _Ma }], [1, { [_hQ2]: _MI }]],
+      1
+    ];
+    var ListFunctionEventInvokeConfigsResponse$ = [
+      3,
+      n05,
+      _LFEICRi,
+      0,
+      [_FEICu, _NM],
+      [() => FunctionEventInvokeConfigList, 0]
+    ];
+    var ListFunctionsByCodeSigningConfigRequest$ = [
+      3,
+      n05,
+      _LFBCSCR,
+      0,
+      [_CSCA, _Ma, _MI],
+      [[0, 1], [0, { [_hQ2]: _Ma }], [1, { [_hQ2]: _MI }]],
+      1
+    ];
+    var ListFunctionsByCodeSigningConfigResponse$ = [
+      3,
+      n05,
+      _LFBCSCRi,
+      0,
+      [_NM, _FAu],
+      [0, 64 | 0]
+    ];
+    var ListFunctionsRequest$ = [
+      3,
+      n05,
+      _LFR,
+      0,
+      [_MR, _FV, _Ma, _MI],
+      [[0, { [_hQ2]: _MR }], [0, { [_hQ2]: _FV }], [0, { [_hQ2]: _Ma }], [1, { [_hQ2]: _MI }]]
+    ];
+    var ListFunctionsResponse$ = [
+      3,
+      n05,
+      _LFRi,
+      0,
+      [_NM, _Fu],
+      [0, [() => FunctionList, 0]]
+    ];
+    var ListFunctionUrlConfigsRequest$ = [
+      3,
+      n05,
+      _LFUCR,
+      0,
+      [_FN, _Ma, _MI],
+      [[0, 1], [0, { [_hQ2]: _Ma }], [1, { [_hQ2]: _MI }]],
+      1
+    ];
+    var ListFunctionUrlConfigsResponse$ = [
+      3,
+      n05,
+      _LFUCRi,
+      0,
+      [_FUCu, _NM],
+      [() => FunctionUrlConfigList, 0],
+      1
+    ];
+    var ListFunctionVersionsByCapacityProviderRequest$ = [
+      3,
+      n05,
+      _LFVBCPR,
+      0,
+      [_CPN, _Ma, _MI],
+      [[0, 1], [0, { [_hQ2]: _Ma }], [1, { [_hQ2]: _MI }]],
+      1
+    ];
+    var ListFunctionVersionsByCapacityProviderResponse$ = [
+      3,
+      n05,
+      _LFVBCPRi,
+      0,
+      [_CPA, _FVu, _NM],
+      [0, () => FunctionVersionsByCapacityProviderList, 0],
+      2
+    ];
+    var ListLayersRequest$ = [
+      3,
+      n05,
+      _LLR,
+      0,
+      [_CAo, _CRo, _Ma, _MI],
+      [[0, { [_hQ2]: _CAo }], [0, { [_hQ2]: _CRo }], [0, { [_hQ2]: _Ma }], [1, { [_hQ2]: _MI }]]
+    ];
+    var ListLayersResponse$ = [
+      3,
+      n05,
+      _LLRi,
+      0,
+      [_NM, _L],
+      [0, () => LayersList]
+    ];
+    var ListLayerVersionsRequest$ = [
+      3,
+      n05,
+      _LLVR,
+      0,
+      [_LN, _CAo, _CRo, _Ma, _MI],
+      [[0, 1], [0, { [_hQ2]: _CAo }], [0, { [_hQ2]: _CRo }], [0, { [_hQ2]: _Ma }], [1, { [_hQ2]: _MI }]],
+      1
+    ];
+    var ListLayerVersionsResponse$ = [
+      3,
+      n05,
+      _LLVRi,
+      0,
+      [_NM, _LV],
+      [0, () => LayerVersionsList]
+    ];
+    var ListProvisionedConcurrencyConfigsRequest$ = [
+      3,
+      n05,
+      _LPCCR,
+      0,
+      [_FN, _Ma, _MI],
+      [[0, 1], [0, { [_hQ2]: _Ma }], [1, { [_hQ2]: _MI }]],
+      1
+    ];
+    var ListProvisionedConcurrencyConfigsResponse$ = [
+      3,
+      n05,
+      _LPCCRi,
+      0,
+      [_PCC, _NM],
+      [() => ProvisionedConcurrencyConfigList, 0]
+    ];
+    var ListTagsRequest$ = [
+      3,
+      n05,
+      _LTR,
+      0,
+      [_Res],
+      [[0, 1]],
+      1
+    ];
+    var ListTagsResponse$ = [
+      3,
+      n05,
+      _LTRi,
+      0,
+      [_Ta2],
+      [128 | 0]
+    ];
+    var ListVersionsByFunctionRequest$ = [
+      3,
+      n05,
+      _LVBFR,
+      0,
+      [_FN, _Ma, _MI],
+      [[0, 1], [0, { [_hQ2]: _Ma }], [1, { [_hQ2]: _MI }]],
+      1
+    ];
+    var ListVersionsByFunctionResponse$ = [
+      3,
+      n05,
+      _LVBFRi,
+      0,
+      [_NM, _Ver],
+      [0, [() => FunctionList, 0]]
+    ];
+    var LoggingConfig$ = [
+      3,
+      n05,
+      _LC,
+      0,
+      [_LF, _ALL, _SLL, _LG],
+      [0, 0, 0, 0]
+    ];
+    var OnFailure$ = [
+      3,
+      n05,
+      _OF,
+      0,
+      [_De],
+      [0]
+    ];
+    var OnSuccess$ = [
+      3,
+      n05,
+      _OS,
+      0,
+      [_De],
+      [0]
+    ];
+    var Operation$ = [
+      3,
+      n05,
+      _Op,
+      0,
+      [_Id, _T2, _STt, _Sta, _PI2, _N, _STu, _ETn, _EDx, _CDo, _SD, _WDa, _CD, _CID],
+      [0, 0, 4, 0, 0, 0, 0, 4, [() => ExecutionDetails$, 0], [() => ContextDetails$, 0], [() => StepDetails$, 0], () => WaitDetails$, [() => CallbackDetails$, 0], [() => ChainedInvokeDetails$, 0]],
+      4
+    ];
+    var OperationUpdate$ = [
+      3,
+      n05,
+      _OU,
+      0,
+      [_Id, _T2, _A2, _PI2, _N, _STu, _Pa, _E2, _COo, _SO, _WO, _CO, _CIO],
+      [0, 0, 0, 0, 0, 0, [() => OperationPayload, 0], [() => ErrorObject$, 0], () => ContextOptions$, () => StepOptions$, () => WaitOptions$, () => CallbackOptions$, () => ChainedInvokeOptions$],
+      3
+    ];
+    var PropagateTags$ = [
+      3,
+      n05,
+      _PT,
+      0,
+      [_Mo, _ETxp],
+      [0, 128 | 0]
+    ];
+    var ProvisionedConcurrencyConfigListItem$ = [
+      3,
+      n05,
+      _PCCLI,
+      0,
+      [_FA, _RPCE, _APCE, _APCEl, _Sta, _SRt, _LM],
+      [0, 1, 1, 1, 0, 0, 0]
+    ];
+    var ProvisionedPollerConfig$ = [
+      3,
+      n05,
+      _PPC,
+      0,
+      [_MP, _MPa, _PGN],
+      [1, 1, 0]
+    ];
+    var PublishLayerVersionRequest$ = [
+      3,
+      n05,
+      _PLVR,
+      0,
+      [_LN, _Cont, _D, _CA2, _CR, _LI],
+      [[0, 1], [() => LayerVersionContentInput$, 0], 0, 64 | 0, 64 | 0, 0],
+      2
+    ];
+    var PublishLayerVersionResponse$ = [
+      3,
+      n05,
+      _PLVRu,
+      0,
+      [_Cont, _LA, _LVA, _D, _CDr, _Ve, _CA2, _CR, _LI],
+      [() => LayerVersionContentOutput$, 0, 0, 0, 0, 1, 64 | 0, 64 | 0, 0]
+    ];
+    var PublishVersionRequest$ = [
+      3,
+      n05,
+      _PVR,
+      0,
+      [_FN, _CSo, _D, _RI, _PTu],
+      [[0, 1], 0, 0, 0, 0],
+      1
+    ];
+    var PutFunctionCodeSigningConfigRequest$ = [
+      3,
+      n05,
+      _PFCSCR,
+      0,
+      [_CSCA, _FN],
+      [0, [0, 1]],
+      2
+    ];
+    var PutFunctionCodeSigningConfigResponse$ = [
+      3,
+      n05,
+      _PFCSCRu,
+      0,
+      [_CSCA, _FN],
+      [0, 0],
+      2
+    ];
+    var PutFunctionConcurrencyRequest$ = [
+      3,
+      n05,
+      _PFCR,
+      0,
+      [_FN, _RCEe],
+      [[0, 1], 1],
+      2
+    ];
+    var PutFunctionEventInvokeConfigRequest$ = [
+      3,
+      n05,
+      _PFEICR,
+      0,
+      [_FN, _Q, _MRA, _MEAIS, _DC],
+      [[0, 1], [0, { [_hQ2]: _Q }], 1, 1, () => DestinationConfig$],
+      1
+    ];
+    var PutFunctionRecursionConfigRequest$ = [
+      3,
+      n05,
+      _PFRCR,
+      0,
+      [_FN, _RL],
+      [[0, 1], 0],
+      2
+    ];
+    var PutFunctionRecursionConfigResponse$ = [
+      3,
+      n05,
+      _PFRCRu,
+      0,
+      [_RL],
+      [0]
+    ];
+    var PutFunctionScalingConfigRequest$ = [
+      3,
+      n05,
+      _PFSCR,
+      0,
+      [_FN, _Q, _FSCu],
+      [[0, 1], [0, { [_hQ2]: _Q }], () => FunctionScalingConfig$],
+      2
+    ];
+    var PutFunctionScalingConfigResponse$ = [
+      3,
+      n05,
+      _PFSCRu,
+      0,
+      [_FS],
+      [0]
+    ];
+    var PutProvisionedConcurrencyConfigRequest$ = [
+      3,
+      n05,
+      _PPCCR,
+      0,
+      [_FN, _Q, _PCE],
+      [[0, 1], [0, { [_hQ2]: _Q }], 1],
+      3
+    ];
+    var PutProvisionedConcurrencyConfigResponse$ = [
+      3,
+      n05,
+      _PPCCRu,
+      0,
+      [_RPCE, _APCEl, _APCE, _Sta, _SRt, _LM],
+      [1, 1, 1, 0, 0, 0]
+    ];
+    var PutRuntimeManagementConfigRequest$ = [
+      3,
+      n05,
+      _PRMCR,
+      0,
+      [_FN, _URO, _Q, _RVA],
+      [[0, 1], 0, [0, { [_hQ2]: _Q }], 0],
+      2
+    ];
+    var PutRuntimeManagementConfigResponse$ = [
+      3,
+      n05,
+      _PRMCRu,
+      0,
+      [_URO, _FA, _RVA],
+      [0, 0, 0],
+      2
+    ];
+    var RemoveLayerVersionPermissionRequest$ = [
+      3,
+      n05,
+      _RLVPR,
+      0,
+      [_LN, _VN, _SI2, _RI],
+      [[0, 1], [1, 1], [0, 1], [0, { [_hQ2]: _RI }]],
+      3
+    ];
+    var RemovePermissionRequest$ = [
+      3,
+      n05,
+      _RPR,
+      0,
+      [_FN, _SI2, _Q, _RI],
+      [[0, 1], [0, 1], [0, { [_hQ2]: _Q }], [0, { [_hQ2]: _RI }]],
+      2
+    ];
+    var ResolvedS3Object$ = [
+      3,
+      n05,
+      _RSO,
+      0,
+      [_SB, _SK, _SOV],
+      [0, 0, 0]
+    ];
+    var RetryDetails$ = [
+      3,
+      n05,
+      _RD,
+      0,
+      [_CAu, _NADS],
+      [1, 1]
+    ];
+    var RuntimeVersionConfig$ = [
+      3,
+      n05,
+      _RVC,
+      0,
+      [_RVA, _E2],
+      [0, [() => RuntimeVersionError$, 0]]
+    ];
+    var RuntimeVersionError$ = [
+      3,
+      n05,
+      _RVE,
+      0,
+      [_EC, _M],
+      [0, [() => SensitiveString, 0]]
+    ];
+    var ScalingConfig$ = [
+      3,
+      n05,
+      _SC,
+      0,
+      [_MCa],
+      [1]
+    ];
+    var SelfManagedEventSource$ = [
+      3,
+      n05,
+      _SMES,
+      0,
+      [_End],
+      [[2, n05, _End, 0, 0, 64 | 0]]
+    ];
+    var SelfManagedKafkaEventSourceConfig$ = [
+      3,
+      n05,
+      _SMKESC,
+      0,
+      [_CGI, _SRC],
+      [0, () => KafkaSchemaRegistryConfig$]
+    ];
+    var SendDurableExecutionCallbackFailureRequest$ = [
+      3,
+      n05,
+      _SDECFR,
+      0,
+      [_CI, _E2],
+      [[0, 1], [() => ErrorObject$, 16]],
+      1
+    ];
+    var SendDurableExecutionCallbackFailureResponse$ = [
+      3,
+      n05,
+      _SDECFRe,
+      0,
+      [],
+      []
+    ];
+    var SendDurableExecutionCallbackHeartbeatRequest$ = [
+      3,
+      n05,
+      _SDECHR,
+      0,
+      [_CI],
+      [[0, 1]],
+      1
+    ];
+    var SendDurableExecutionCallbackHeartbeatResponse$ = [
+      3,
+      n05,
+      _SDECHRe,
+      0,
+      [],
+      []
+    ];
+    var SendDurableExecutionCallbackSuccessRequest$ = [
+      3,
+      n05,
+      _SDECSR,
+      0,
+      [_CI, _Re],
+      [[0, 1], [() => BinaryOperationPayload, 16]],
+      1
+    ];
+    var SendDurableExecutionCallbackSuccessResponse$ = [
+      3,
+      n05,
+      _SDECSRe,
+      0,
+      [],
+      []
+    ];
+    var SnapStart$ = [
+      3,
+      n05,
+      _SSn,
+      0,
+      [_AOp],
+      [0]
+    ];
+    var SnapStartResponse$ = [
+      3,
+      n05,
+      _SSR,
+      0,
+      [_AOp, _OSp],
+      [0, 0]
+    ];
+    var SourceAccessConfiguration$ = [
+      3,
+      n05,
+      _SACo,
+      0,
+      [_T2, _URI],
+      [0, 0]
+    ];
+    var StepDetails$ = [
+      3,
+      n05,
+      _SD,
+      0,
+      [_Att, _NAT, _Re, _E2],
+      [1, 4, [() => OperationPayload, 0], [() => ErrorObject$, 0]]
+    ];
+    var StepFailedDetails$ = [
+      3,
+      n05,
+      _SFD,
+      0,
+      [_E2, _RD],
+      [[() => EventError$, 0], () => RetryDetails$],
+      2
+    ];
+    var StepOptions$ = [
+      3,
+      n05,
+      _SO,
+      0,
+      [_NADS],
+      [1]
+    ];
+    var StepStartedDetails$ = [
+      3,
+      n05,
+      _SSD,
+      0,
+      [],
+      []
+    ];
+    var StepSucceededDetails$ = [
+      3,
+      n05,
+      _SSDt,
+      0,
+      [_Re, _RD],
+      [[() => EventResult$, 0], () => RetryDetails$],
+      2
+    ];
+    var StopDurableExecutionRequest$ = [
+      3,
+      n05,
+      _SDER,
+      0,
+      [_DEA, _E2],
+      [[0, 1], [() => ErrorObject$, 16]],
+      1
+    ];
+    var StopDurableExecutionResponse$ = [
+      3,
+      n05,
+      _SDERt,
+      0,
+      [_STto],
+      [4],
+      1
+    ];
+    var TagResourceRequest$ = [
+      3,
+      n05,
+      _TRR,
+      0,
+      [_Res, _Ta2],
+      [[0, 1], 128 | 0],
+      2
+    ];
+    var TagsError$ = [
+      3,
+      n05,
+      _TE,
+      0,
+      [_EC, _M],
+      [0, 0],
+      2
+    ];
+    var TargetTrackingScalingPolicy$ = [
+      3,
+      n05,
+      _TTSP,
+      0,
+      [_PMT, _TV],
+      [0, 1],
+      2
+    ];
+    var TenancyConfig$ = [
+      3,
+      n05,
+      _TCe,
+      0,
+      [_TIM],
+      [0],
+      1
+    ];
+    var TraceHeader$ = [
+      3,
+      n05,
+      _TH,
+      0,
+      [_XATIm],
+      [0]
+    ];
+    var TracingConfig$ = [
+      3,
+      n05,
+      _TCr,
+      0,
+      [_Mo],
+      [0]
+    ];
+    var TracingConfigResponse$ = [
+      3,
+      n05,
+      _TCR,
+      0,
+      [_Mo],
+      [0]
+    ];
+    var UntagResourceRequest$ = [
+      3,
+      n05,
+      _URR,
+      0,
+      [_Res, _TK],
+      [[0, 1], [() => TagKeyList, { [_hQ2]: _tK }]],
+      2
+    ];
+    var UpdateAliasRequest$ = [
+      3,
+      n05,
+      _UAR,
+      0,
+      [_FN, _N, _FV, _D, _RC2, _RI],
+      [[0, 1], [0, 1], 0, 0, () => AliasRoutingConfiguration$, 0],
+      2
+    ];
+    var UpdateCapacityProviderRequest$ = [
+      3,
+      n05,
+      _UCPR,
+      0,
+      [_CPN, _CPSC, _PT, _TC2],
+      [[0, 1], () => CapacityProviderScalingConfig$, () => PropagateTags$, () => CapacityProviderTelemetryConfig$],
+      1
+    ];
+    var UpdateCapacityProviderResponse$ = [
+      3,
+      n05,
+      _UCPRp,
+      0,
+      [_CP],
+      [() => CapacityProvider$],
+      1
+    ];
+    var UpdateCodeSigningConfigRequest$ = [
+      3,
+      n05,
+      _UCSCR,
+      0,
+      [_CSCA, _D, _AP, _CSP],
+      [[0, 1], 0, () => AllowedPublishers$, () => CodeSigningPolicies$],
+      1
+    ];
+    var UpdateCodeSigningConfigResponse$ = [
+      3,
+      n05,
+      _UCSCRp,
+      0,
+      [_CSC],
+      [() => CodeSigningConfig$],
+      1
+    ];
+    var UpdateEventSourceMappingRequest$ = [
+      3,
+      n05,
+      _UESMR,
+      0,
+      [_UUID, _FN, _En, _BSa, _FCi, _KMSKA, _MC, _LC, _SC, _MBWIS, _PF, _DC, _MRAIS, _BBOFE, _MRA, _TWIS, _SAC, _FRT, _AMKESC, _SMKESC, _DDBESC, _PPC],
+      [[0, 1], 0, 2, 1, () => FilterCriteria$, 0, () => EventSourceMappingMetricsConfig$, () => EventSourceMappingLoggingConfig$, () => ScalingConfig$, 1, 1, () => DestinationConfig$, 1, 2, 1, 1, () => SourceAccessConfigurations, 64 | 0, () => AmazonManagedKafkaEventSourceConfig$, () => SelfManagedKafkaEventSourceConfig$, () => DocumentDBEventSourceConfig$, () => ProvisionedPollerConfig$],
+      1
+    ];
+    var UpdateFunctionCodeRequest$ = [
+      3,
+      n05,
+      _UFCR,
+      0,
+      [_FN, _ZF, _SB, _SK, _SOV, _SOSM, _IU, _Ar, _Pu, _PTu, _DR, _RI, _SKMSKA],
+      [[0, 1], [() => _Blob, 0], 0, 0, 0, 0, 0, 64 | 0, 2, 0, 2, 0, 0],
+      1
+    ];
+    var UpdateFunctionConfigurationRequest$ = [
+      3,
+      n05,
+      _UFCRp,
+      0,
+      [_FN, _Ro, _H, _D, _Ti, _MS, _VC, _Env, _Ru, _DLC, _KMSKA, _TCr, _RI, _L, _FSC, _IC, _ES, _SSn, _LC, _CPC, _DCu],
+      [[0, 1], 0, 0, 0, 1, 1, () => VpcConfig$, [() => Environment$, 0], 0, () => DeadLetterConfig$, 0, () => TracingConfig$, 0, 64 | 0, () => FileSystemConfigList, () => ImageConfig$, () => EphemeralStorage$, () => SnapStart$, () => LoggingConfig$, () => CapacityProviderConfig$, () => DurableConfig$],
+      1
+    ];
+    var UpdateFunctionEventInvokeConfigRequest$ = [
+      3,
+      n05,
+      _UFEICR,
+      0,
+      [_FN, _Q, _MRA, _MEAIS, _DC],
+      [[0, 1], [0, { [_hQ2]: _Q }], 1, 1, () => DestinationConfig$],
+      1
+    ];
+    var UpdateFunctionUrlConfigRequest$ = [
+      3,
+      n05,
+      _UFUCR,
+      0,
+      [_FN, _Q, _AT3, _Co, _IM],
+      [[0, 1], [0, { [_hQ2]: _Q }], 0, () => Cors$, 0],
+      1
+    ];
+    var UpdateFunctionUrlConfigResponse$ = [
+      3,
+      n05,
+      _UFUCRp,
+      0,
+      [_FU, _FA, _AT3, _CTr, _LMT, _Co, _IM],
+      [0, 0, 0, 0, 0, () => Cors$, 0],
+      5
+    ];
+    var VpcConfig$ = [
+      3,
+      n05,
+      _VC,
+      0,
+      [_SIu, _SGI, _IAFDS],
+      [64 | 0, 64 | 0, 2]
+    ];
+    var VpcConfigResponse$ = [
+      3,
+      n05,
+      _VCR,
+      0,
+      [_SIu, _SGI, _VI, _IAFDS],
+      [64 | 0, 64 | 0, 0, 2]
+    ];
+    var WaitCancelledDetails$ = [
+      3,
+      n05,
+      _WCD,
+      0,
+      [_E2],
+      [[() => EventError$, 0]]
+    ];
+    var WaitDetails$ = [
+      3,
+      n05,
+      _WDa,
+      0,
+      [_SET],
+      [4]
+    ];
+    var WaitOptions$ = [
+      3,
+      n05,
+      _WO,
+      0,
+      [_WS],
+      [1]
+    ];
+    var WaitStartedDetails$ = [
+      3,
+      n05,
+      _WSD,
+      0,
+      [_Du, _SET],
+      [1, 4],
+      2
+    ];
+    var WaitSucceededDetails$ = [
+      3,
+      n05,
+      _WSDa,
+      0,
+      [_Du],
+      [1]
+    ];
+    var __Unit = "unit";
+    var AliasList = [
+      1,
+      n05,
+      _ALl,
+      0,
+      () => AliasConfiguration$
+    ];
+    var CapacityProviderScalingPoliciesList = [
+      1,
+      n05,
+      _CPSPL,
+      0,
+      () => TargetTrackingScalingPolicy$
+    ];
+    var CapacityProvidersList = [
+      1,
+      n05,
+      _CPL,
+      0,
+      () => CapacityProvider$
+    ];
+    var CodeSigningConfigList = [
+      1,
+      n05,
+      _CSCL,
+      0,
+      () => CodeSigningConfig$
+    ];
+    var DurableExecutions = [
+      1,
+      n05,
+      _DE,
+      0,
+      () => Execution$
+    ];
+    var Events = [
+      1,
+      n05,
+      _Eve,
+      0,
+      [
+        () => Event$,
+        0
+      ]
+    ];
+    var EventSourceMappingsList = [
+      1,
+      n05,
+      _ESML,
+      0,
+      () => EventSourceMappingConfiguration$
+    ];
+    var FileSystemConfigList = [
+      1,
+      n05,
+      _FSCL,
+      0,
+      () => FileSystemConfig$
+    ];
+    var FilterList = [
+      1,
+      n05,
+      _FL,
+      0,
+      () => Filter$
+    ];
+    var FunctionEventInvokeConfigList = [
+      1,
+      n05,
+      _FEICL,
+      0,
+      () => FunctionEventInvokeConfig$
+    ];
+    var FunctionList = [
+      1,
+      n05,
+      _FLu,
+      0,
+      [
+        () => FunctionConfiguration$,
+        0
+      ]
+    ];
+    var FunctionUrlConfigList = [
+      1,
+      n05,
+      _FUCL,
+      0,
+      () => FunctionUrlConfig$
+    ];
+    var FunctionVersionsByCapacityProviderList = [
+      1,
+      n05,
+      _FVBCPL,
+      0,
+      () => FunctionVersionsByCapacityProviderListItem$
+    ];
+    var KafkaSchemaRegistryAccessConfigList = [
+      1,
+      n05,
+      _KSRACL,
+      0,
+      () => KafkaSchemaRegistryAccessConfig$
+    ];
+    var KafkaSchemaValidationConfigList = [
+      1,
+      n05,
+      _KSVCL,
+      0,
+      () => KafkaSchemaValidationConfig$
+    ];
+    var LayersList = [
+      1,
+      n05,
+      _LL,
+      0,
+      () => LayersListItem$
+    ];
+    var LayersReferenceList = [
+      1,
+      n05,
+      _LRL,
+      0,
+      () => Layer$
+    ];
+    var LayerVersionsList = [
+      1,
+      n05,
+      _LVL,
+      0,
+      () => LayerVersionsListItem$
+    ];
+    var Operations = [
+      1,
+      n05,
+      _O,
+      0,
+      [
+        () => Operation$,
+        0
+      ]
+    ];
+    var OperationUpdates = [
+      1,
+      n05,
+      _OUp,
+      0,
+      [
+        () => OperationUpdate$,
+        0
+      ]
+    ];
+    var ProvisionedConcurrencyConfigList = [
+      1,
+      n05,
+      _PCCL,
+      0,
+      () => ProvisionedConcurrencyConfigListItem$
+    ];
+    var SourceAccessConfigurations = [
+      1,
+      n05,
+      _SAC,
+      0,
+      () => SourceAccessConfiguration$
+    ];
+    var StackTraceEntries = [
+      1,
+      n05,
+      _STEt,
+      0,
+      [
+        () => StackTraceEntry,
+        0
+      ]
+    ];
+    var TagKeyList = [
+      1,
+      n05,
+      _TKL,
+      0,
+      [
+        0,
+        { [_xN]: _K2 }
+      ]
+    ];
+    var EnvironmentVariables = [
+      2,
+      n05,
+      _EVn,
+      8,
+      [
+        () => EnvironmentVariableName,
+        0
+      ],
+      [
+        () => EnvironmentVariableValue,
+        0
+      ]
+    ];
+    var InvokeWithResponseStreamResponseEvent$ = [
+      4,
+      n05,
+      _IWRSRE,
+      { [_st]: 1 },
+      [_PCa, _ICn],
+      [[() => InvokeResponseStreamUpdate$, 0], () => InvokeWithResponseStreamCompleteEvent$]
+    ];
+    var AddLayerVersionPermission$ = [
+      9,
+      n05,
+      _ALVP,
+      { [_h4]: ["POST", "/2018-10-31/layers/{LayerName}/versions/{VersionNumber}/policy", 201] },
+      () => AddLayerVersionPermissionRequest$,
+      () => AddLayerVersionPermissionResponse$
+    ];
+    var AddPermission$ = [
+      9,
+      n05,
+      _APd,
+      { [_h4]: ["POST", "/2015-03-31/functions/{FunctionName}/policy", 201] },
+      () => AddPermissionRequest$,
+      () => AddPermissionResponse$
+    ];
+    var CheckpointDurableExecution$ = [
+      9,
+      n05,
+      _CDE,
+      { [_h4]: ["POST", "/2025-12-01/durable-executions/{DurableExecutionArn}/checkpoint", 200] },
+      () => CheckpointDurableExecutionRequest$,
+      () => CheckpointDurableExecutionResponse$
+    ];
+    var CreateAlias$ = [
+      9,
+      n05,
+      _CAr,
+      { [_h4]: ["POST", "/2015-03-31/functions/{FunctionName}/aliases", 201] },
+      () => CreateAliasRequest$,
+      () => AliasConfiguration$
+    ];
+    var CreateCapacityProvider$ = [
+      9,
+      n05,
+      _CCP,
+      { [_h4]: ["POST", "/2025-11-30/capacity-providers", 202] },
+      () => CreateCapacityProviderRequest$,
+      () => CreateCapacityProviderResponse$
+    ];
+    var CreateCodeSigningConfig$ = [
+      9,
+      n05,
+      _CCSC,
+      { [_h4]: ["POST", "/2020-04-22/code-signing-configs", 201] },
+      () => CreateCodeSigningConfigRequest$,
+      () => CreateCodeSigningConfigResponse$
+    ];
+    var CreateEventSourceMapping$ = [
+      9,
+      n05,
+      _CESM,
+      { [_h4]: ["POST", "/2015-03-31/event-source-mappings", 202] },
+      () => CreateEventSourceMappingRequest$,
+      () => EventSourceMappingConfiguration$
+    ];
+    var CreateFunction$ = [
+      9,
+      n05,
+      _CF,
+      { [_h4]: ["POST", "/2015-03-31/functions", 201] },
+      () => CreateFunctionRequest$,
+      () => FunctionConfiguration$
+    ];
+    var CreateFunctionUrlConfig$ = [
+      9,
+      n05,
+      _CFUC,
+      { [_h4]: ["POST", "/2021-10-31/functions/{FunctionName}/url", 201] },
+      () => CreateFunctionUrlConfigRequest$,
+      () => CreateFunctionUrlConfigResponse$
+    ];
+    var DeleteAlias$ = [
+      9,
+      n05,
+      _DA,
+      { [_h4]: ["DELETE", "/2015-03-31/functions/{FunctionName}/aliases/{Name}", 204] },
+      () => DeleteAliasRequest$,
+      () => __Unit
+    ];
+    var DeleteCapacityProvider$ = [
+      9,
+      n05,
+      _DCP,
+      { [_h4]: ["DELETE", "/2025-11-30/capacity-providers/{CapacityProviderName}", 202] },
+      () => DeleteCapacityProviderRequest$,
+      () => DeleteCapacityProviderResponse$
+    ];
+    var DeleteCodeSigningConfig$ = [
+      9,
+      n05,
+      _DCSC,
+      { [_h4]: ["DELETE", "/2020-04-22/code-signing-configs/{CodeSigningConfigArn}", 204] },
+      () => DeleteCodeSigningConfigRequest$,
+      () => DeleteCodeSigningConfigResponse$
+    ];
+    var DeleteEventSourceMapping$ = [
+      9,
+      n05,
+      _DESM,
+      { [_h4]: ["DELETE", "/2015-03-31/event-source-mappings/{UUID}", 202] },
+      () => DeleteEventSourceMappingRequest$,
+      () => EventSourceMappingConfiguration$
+    ];
+    var DeleteFunction$ = [
+      9,
+      n05,
+      _DF,
+      { [_h4]: ["DELETE", "/2015-03-31/functions/{FunctionName}", 200] },
+      () => DeleteFunctionRequest$,
+      () => DeleteFunctionResponse$
+    ];
+    var DeleteFunctionCodeSigningConfig$ = [
+      9,
+      n05,
+      _DFCSC,
+      { [_h4]: ["DELETE", "/2020-06-30/functions/{FunctionName}/code-signing-config", 204] },
+      () => DeleteFunctionCodeSigningConfigRequest$,
+      () => __Unit
+    ];
+    var DeleteFunctionConcurrency$ = [
+      9,
+      n05,
+      _DFC,
+      { [_h4]: ["DELETE", "/2017-10-31/functions/{FunctionName}/concurrency", 204] },
+      () => DeleteFunctionConcurrencyRequest$,
+      () => __Unit
+    ];
+    var DeleteFunctionEventInvokeConfig$ = [
+      9,
+      n05,
+      _DFEIC,
+      { [_h4]: ["DELETE", "/2019-09-25/functions/{FunctionName}/event-invoke-config", 204] },
+      () => DeleteFunctionEventInvokeConfigRequest$,
+      () => __Unit
+    ];
+    var DeleteFunctionUrlConfig$ = [
+      9,
+      n05,
+      _DFUC,
+      { [_h4]: ["DELETE", "/2021-10-31/functions/{FunctionName}/url", 204] },
+      () => DeleteFunctionUrlConfigRequest$,
+      () => __Unit
+    ];
+    var DeleteLayerVersion$ = [
+      9,
+      n05,
+      _DLV,
+      { [_h4]: ["DELETE", "/2018-10-31/layers/{LayerName}/versions/{VersionNumber}", 204] },
+      () => DeleteLayerVersionRequest$,
+      () => __Unit
+    ];
+    var DeleteProvisionedConcurrencyConfig$ = [
+      9,
+      n05,
+      _DPCC,
+      { [_h4]: ["DELETE", "/2019-09-30/functions/{FunctionName}/provisioned-concurrency", 204] },
+      () => DeleteProvisionedConcurrencyConfigRequest$,
+      () => __Unit
+    ];
+    var GetAccountSettings$ = [
+      9,
+      n05,
+      _GAS,
+      { [_h4]: ["GET", "/2016-08-19/account-settings", 200] },
+      () => GetAccountSettingsRequest$,
+      () => GetAccountSettingsResponse$
+    ];
+    var GetAlias$ = [
+      9,
+      n05,
+      _GA,
+      { [_h4]: ["GET", "/2015-03-31/functions/{FunctionName}/aliases/{Name}", 200] },
+      () => GetAliasRequest$,
+      () => AliasConfiguration$
+    ];
+    var GetCapacityProvider$ = [
+      9,
+      n05,
+      _GCP,
+      { [_h4]: ["GET", "/2025-11-30/capacity-providers/{CapacityProviderName}", 200] },
+      () => GetCapacityProviderRequest$,
+      () => GetCapacityProviderResponse$
+    ];
+    var GetCodeSigningConfig$ = [
+      9,
+      n05,
+      _GCSC,
+      { [_h4]: ["GET", "/2020-04-22/code-signing-configs/{CodeSigningConfigArn}", 200] },
+      () => GetCodeSigningConfigRequest$,
+      () => GetCodeSigningConfigResponse$
+    ];
+    var GetDurableExecution$ = [
+      9,
+      n05,
+      _GDE,
+      { [_h4]: ["GET", "/2025-12-01/durable-executions/{DurableExecutionArn}", 200] },
+      () => GetDurableExecutionRequest$,
+      () => GetDurableExecutionResponse$
+    ];
+    var GetDurableExecutionHistory$ = [
+      9,
+      n05,
+      _GDEH,
+      { [_h4]: ["GET", "/2025-12-01/durable-executions/{DurableExecutionArn}/history", 200] },
+      () => GetDurableExecutionHistoryRequest$,
+      () => GetDurableExecutionHistoryResponse$
+    ];
+    var GetDurableExecutionState$ = [
+      9,
+      n05,
+      _GDES,
+      { [_h4]: ["GET", "/2025-12-01/durable-executions/{DurableExecutionArn}/state", 200] },
+      () => GetDurableExecutionStateRequest$,
+      () => GetDurableExecutionStateResponse$
+    ];
+    var GetEventSourceMapping$ = [
+      9,
+      n05,
+      _GESM,
+      { [_h4]: ["GET", "/2015-03-31/event-source-mappings/{UUID}", 200] },
+      () => GetEventSourceMappingRequest$,
+      () => EventSourceMappingConfiguration$
+    ];
+    var GetFunction$ = [
+      9,
+      n05,
+      _GF,
+      { [_h4]: ["GET", "/2015-03-31/functions/{FunctionName}", 200] },
+      () => GetFunctionRequest$,
+      () => GetFunctionResponse$
+    ];
+    var GetFunctionCodeSigningConfig$ = [
+      9,
+      n05,
+      _GFCSC,
+      { [_h4]: ["GET", "/2020-06-30/functions/{FunctionName}/code-signing-config", 200] },
+      () => GetFunctionCodeSigningConfigRequest$,
+      () => GetFunctionCodeSigningConfigResponse$
+    ];
+    var GetFunctionConcurrency$ = [
+      9,
+      n05,
+      _GFC,
+      { [_h4]: ["GET", "/2019-09-30/functions/{FunctionName}/concurrency", 200] },
+      () => GetFunctionConcurrencyRequest$,
+      () => GetFunctionConcurrencyResponse$
+    ];
+    var GetFunctionConfiguration$ = [
+      9,
+      n05,
+      _GFCe,
+      { [_h4]: ["GET", "/2015-03-31/functions/{FunctionName}/configuration", 200] },
+      () => GetFunctionConfigurationRequest$,
+      () => FunctionConfiguration$
+    ];
+    var GetFunctionEventInvokeConfig$ = [
+      9,
+      n05,
+      _GFEIC,
+      { [_h4]: ["GET", "/2019-09-25/functions/{FunctionName}/event-invoke-config", 200] },
+      () => GetFunctionEventInvokeConfigRequest$,
+      () => FunctionEventInvokeConfig$
+    ];
+    var GetFunctionRecursionConfig$ = [
+      9,
+      n05,
+      _GFRC,
+      { [_h4]: ["GET", "/2024-08-31/functions/{FunctionName}/recursion-config", 200] },
+      () => GetFunctionRecursionConfigRequest$,
+      () => GetFunctionRecursionConfigResponse$
+    ];
+    var GetFunctionScalingConfig$ = [
+      9,
+      n05,
+      _GFSC,
+      { [_h4]: ["GET", "/2025-11-30/functions/{FunctionName}/function-scaling-config", 200] },
+      () => GetFunctionScalingConfigRequest$,
+      () => GetFunctionScalingConfigResponse$
+    ];
+    var GetFunctionUrlConfig$ = [
+      9,
+      n05,
+      _GFUC,
+      { [_h4]: ["GET", "/2021-10-31/functions/{FunctionName}/url", 200] },
+      () => GetFunctionUrlConfigRequest$,
+      () => GetFunctionUrlConfigResponse$
+    ];
+    var GetLayerVersion$ = [
+      9,
+      n05,
+      _GLV,
+      { [_h4]: ["GET", "/2018-10-31/layers/{LayerName}/versions/{VersionNumber}", 200] },
+      () => GetLayerVersionRequest$,
+      () => GetLayerVersionResponse$
+    ];
+    var GetLayerVersionByArn$ = [
+      9,
+      n05,
+      _GLVBA,
+      { [_h4]: ["GET", "/2018-10-31/layers?find=LayerVersion", 200] },
+      () => GetLayerVersionByArnRequest$,
+      () => GetLayerVersionResponse$
+    ];
+    var GetLayerVersionPolicy$ = [
+      9,
+      n05,
+      _GLVP,
+      { [_h4]: ["GET", "/2018-10-31/layers/{LayerName}/versions/{VersionNumber}/policy", 200] },
+      () => GetLayerVersionPolicyRequest$,
+      () => GetLayerVersionPolicyResponse$
+    ];
+    var GetPolicy$ = [
+      9,
+      n05,
+      _GP,
+      { [_h4]: ["GET", "/2015-03-31/functions/{FunctionName}/policy", 200] },
+      () => GetPolicyRequest$,
+      () => GetPolicyResponse$
+    ];
+    var GetProvisionedConcurrencyConfig$ = [
+      9,
+      n05,
+      _GPCC,
+      { [_h4]: ["GET", "/2019-09-30/functions/{FunctionName}/provisioned-concurrency", 200] },
+      () => GetProvisionedConcurrencyConfigRequest$,
+      () => GetProvisionedConcurrencyConfigResponse$
+    ];
+    var GetRuntimeManagementConfig$ = [
+      9,
+      n05,
+      _GRMC,
+      { [_h4]: ["GET", "/2021-07-20/functions/{FunctionName}/runtime-management-config", 200] },
+      () => GetRuntimeManagementConfigRequest$,
+      () => GetRuntimeManagementConfigResponse$
+    ];
+    var Invoke$ = [
+      9,
+      n05,
+      _In,
+      { [_h4]: ["POST", "/2015-03-31/functions/{FunctionName}/invocations", 200] },
+      () => InvocationRequest$,
+      () => InvocationResponse$
+    ];
+    var InvokeAsync$ = [
+      9,
+      n05,
+      _IAn,
+      { [_h4]: ["POST", "/2014-11-13/functions/{FunctionName}/invoke-async", 202] },
+      () => InvokeAsyncRequest$,
+      () => InvokeAsyncResponse$
+    ];
+    var InvokeWithResponseStream$ = [
+      9,
+      n05,
+      _IWRS,
+      { [_h4]: ["POST", "/2021-11-15/functions/{FunctionName}/response-streaming-invocations", 200] },
+      () => InvokeWithResponseStreamRequest$,
+      () => InvokeWithResponseStreamResponse$
+    ];
+    var ListAliases$ = [
+      9,
+      n05,
+      _LAi,
+      { [_h4]: ["GET", "/2015-03-31/functions/{FunctionName}/aliases", 200] },
+      () => ListAliasesRequest$,
+      () => ListAliasesResponse$
+    ];
+    var ListCapacityProviders$ = [
+      9,
+      n05,
+      _LCP,
+      { [_h4]: ["GET", "/2025-11-30/capacity-providers", 200] },
+      () => ListCapacityProvidersRequest$,
+      () => ListCapacityProvidersResponse$
+    ];
+    var ListCodeSigningConfigs$ = [
+      9,
+      n05,
+      _LCSC,
+      { [_h4]: ["GET", "/2020-04-22/code-signing-configs", 200] },
+      () => ListCodeSigningConfigsRequest$,
+      () => ListCodeSigningConfigsResponse$
+    ];
+    var ListDurableExecutionsByFunction$ = [
+      9,
+      n05,
+      _LDEBF,
+      { [_h4]: ["GET", "/2025-12-01/functions/{FunctionName}/durable-executions", 200] },
+      () => ListDurableExecutionsByFunctionRequest$,
+      () => ListDurableExecutionsByFunctionResponse$
+    ];
+    var ListEventSourceMappings$ = [
+      9,
+      n05,
+      _LESM,
+      { [_h4]: ["GET", "/2015-03-31/event-source-mappings", 200] },
+      () => ListEventSourceMappingsRequest$,
+      () => ListEventSourceMappingsResponse$
+    ];
+    var ListFunctionEventInvokeConfigs$ = [
+      9,
+      n05,
+      _LFEIC,
+      { [_h4]: ["GET", "/2019-09-25/functions/{FunctionName}/event-invoke-config/list", 200] },
+      () => ListFunctionEventInvokeConfigsRequest$,
+      () => ListFunctionEventInvokeConfigsResponse$
+    ];
+    var ListFunctions$ = [
+      9,
+      n05,
+      _LFi,
+      { [_h4]: ["GET", "/2015-03-31/functions", 200] },
+      () => ListFunctionsRequest$,
+      () => ListFunctionsResponse$
+    ];
+    var ListFunctionsByCodeSigningConfig$ = [
+      9,
+      n05,
+      _LFBCSC,
+      { [_h4]: ["GET", "/2020-04-22/code-signing-configs/{CodeSigningConfigArn}/functions", 200] },
+      () => ListFunctionsByCodeSigningConfigRequest$,
+      () => ListFunctionsByCodeSigningConfigResponse$
+    ];
+    var ListFunctionUrlConfigs$ = [
+      9,
+      n05,
+      _LFUC,
+      { [_h4]: ["GET", "/2021-10-31/functions/{FunctionName}/urls", 200] },
+      () => ListFunctionUrlConfigsRequest$,
+      () => ListFunctionUrlConfigsResponse$
+    ];
+    var ListFunctionVersionsByCapacityProvider$ = [
+      9,
+      n05,
+      _LFVBCP,
+      { [_h4]: ["GET", "/2025-11-30/capacity-providers/{CapacityProviderName}/function-versions", 200] },
+      () => ListFunctionVersionsByCapacityProviderRequest$,
+      () => ListFunctionVersionsByCapacityProviderResponse$
+    ];
+    var ListLayers$ = [
+      9,
+      n05,
+      _LLi,
+      { [_h4]: ["GET", "/2018-10-31/layers", 200] },
+      () => ListLayersRequest$,
+      () => ListLayersResponse$
+    ];
+    var ListLayerVersions$ = [
+      9,
+      n05,
+      _LLV,
+      { [_h4]: ["GET", "/2018-10-31/layers/{LayerName}/versions", 200] },
+      () => ListLayerVersionsRequest$,
+      () => ListLayerVersionsResponse$
+    ];
+    var ListProvisionedConcurrencyConfigs$ = [
+      9,
+      n05,
+      _LPCC,
+      { [_h4]: ["GET", "/2019-09-30/functions/{FunctionName}/provisioned-concurrency?List=ALL", 200] },
+      () => ListProvisionedConcurrencyConfigsRequest$,
+      () => ListProvisionedConcurrencyConfigsResponse$
+    ];
+    var ListTags$ = [
+      9,
+      n05,
+      _LTi,
+      { [_h4]: ["GET", "/2017-03-31/tags/{Resource}", 200] },
+      () => ListTagsRequest$,
+      () => ListTagsResponse$
+    ];
+    var ListVersionsByFunction$ = [
+      9,
+      n05,
+      _LVBF,
+      { [_h4]: ["GET", "/2015-03-31/functions/{FunctionName}/versions", 200] },
+      () => ListVersionsByFunctionRequest$,
+      () => ListVersionsByFunctionResponse$
+    ];
+    var PublishLayerVersion$ = [
+      9,
+      n05,
+      _PLV,
+      { [_h4]: ["POST", "/2018-10-31/layers/{LayerName}/versions", 201] },
+      () => PublishLayerVersionRequest$,
+      () => PublishLayerVersionResponse$
+    ];
+    var PublishVersion$ = [
+      9,
+      n05,
+      _PV,
+      { [_h4]: ["POST", "/2015-03-31/functions/{FunctionName}/versions", 201] },
+      () => PublishVersionRequest$,
+      () => FunctionConfiguration$
+    ];
+    var PutFunctionCodeSigningConfig$ = [
+      9,
+      n05,
+      _PFCSC,
+      { [_h4]: ["PUT", "/2020-06-30/functions/{FunctionName}/code-signing-config", 200] },
+      () => PutFunctionCodeSigningConfigRequest$,
+      () => PutFunctionCodeSigningConfigResponse$
+    ];
+    var PutFunctionConcurrency$ = [
+      9,
+      n05,
+      _PFC,
+      { [_h4]: ["PUT", "/2017-10-31/functions/{FunctionName}/concurrency", 200] },
+      () => PutFunctionConcurrencyRequest$,
+      () => Concurrency$
+    ];
+    var PutFunctionEventInvokeConfig$ = [
+      9,
+      n05,
+      _PFEIC,
+      { [_h4]: ["PUT", "/2019-09-25/functions/{FunctionName}/event-invoke-config", 200] },
+      () => PutFunctionEventInvokeConfigRequest$,
+      () => FunctionEventInvokeConfig$
+    ];
+    var PutFunctionRecursionConfig$ = [
+      9,
+      n05,
+      _PFRC,
+      { [_h4]: ["PUT", "/2024-08-31/functions/{FunctionName}/recursion-config", 200] },
+      () => PutFunctionRecursionConfigRequest$,
+      () => PutFunctionRecursionConfigResponse$
+    ];
+    var PutFunctionScalingConfig$ = [
+      9,
+      n05,
+      _PFSC,
+      { [_h4]: ["PUT", "/2025-11-30/functions/{FunctionName}/function-scaling-config", 202] },
+      () => PutFunctionScalingConfigRequest$,
+      () => PutFunctionScalingConfigResponse$
+    ];
+    var PutProvisionedConcurrencyConfig$ = [
+      9,
+      n05,
+      _PPCC,
+      { [_h4]: ["PUT", "/2019-09-30/functions/{FunctionName}/provisioned-concurrency", 202] },
+      () => PutProvisionedConcurrencyConfigRequest$,
+      () => PutProvisionedConcurrencyConfigResponse$
+    ];
+    var PutRuntimeManagementConfig$ = [
+      9,
+      n05,
+      _PRMC,
+      { [_h4]: ["PUT", "/2021-07-20/functions/{FunctionName}/runtime-management-config", 200] },
+      () => PutRuntimeManagementConfigRequest$,
+      () => PutRuntimeManagementConfigResponse$
+    ];
+    var RemoveLayerVersionPermission$ = [
+      9,
+      n05,
+      _RLVP,
+      { [_h4]: ["DELETE", "/2018-10-31/layers/{LayerName}/versions/{VersionNumber}/policy/{StatementId}", 204] },
+      () => RemoveLayerVersionPermissionRequest$,
+      () => __Unit
+    ];
+    var RemovePermission$ = [
+      9,
+      n05,
+      _RP,
+      { [_h4]: ["DELETE", "/2015-03-31/functions/{FunctionName}/policy/{StatementId}", 204] },
+      () => RemovePermissionRequest$,
+      () => __Unit
+    ];
+    var SendDurableExecutionCallbackFailure$ = [
+      9,
+      n05,
+      _SDECF,
+      { [_h4]: ["POST", "/2025-12-01/durable-execution-callbacks/{CallbackId}/fail", 200] },
+      () => SendDurableExecutionCallbackFailureRequest$,
+      () => SendDurableExecutionCallbackFailureResponse$
+    ];
+    var SendDurableExecutionCallbackHeartbeat$ = [
+      9,
+      n05,
+      _SDECH,
+      { [_h4]: ["POST", "/2025-12-01/durable-execution-callbacks/{CallbackId}/heartbeat", 200] },
+      () => SendDurableExecutionCallbackHeartbeatRequest$,
+      () => SendDurableExecutionCallbackHeartbeatResponse$
+    ];
+    var SendDurableExecutionCallbackSuccess$ = [
+      9,
+      n05,
+      _SDECS,
+      { [_h4]: ["POST", "/2025-12-01/durable-execution-callbacks/{CallbackId}/succeed", 200] },
+      () => SendDurableExecutionCallbackSuccessRequest$,
+      () => SendDurableExecutionCallbackSuccessResponse$
+    ];
+    var StopDurableExecution$ = [
+      9,
+      n05,
+      _SDE2,
+      { [_h4]: ["POST", "/2025-12-01/durable-executions/{DurableExecutionArn}/stop", 200] },
+      () => StopDurableExecutionRequest$,
+      () => StopDurableExecutionResponse$
+    ];
+    var TagResource$ = [
+      9,
+      n05,
+      _TR,
+      { [_h4]: ["POST", "/2017-03-31/tags/{Resource}", 204] },
+      () => TagResourceRequest$,
+      () => __Unit
+    ];
+    var UntagResource$ = [
+      9,
+      n05,
+      _UR,
+      { [_h4]: ["DELETE", "/2017-03-31/tags/{Resource}", 204] },
+      () => UntagResourceRequest$,
+      () => __Unit
+    ];
+    var UpdateAlias$ = [
+      9,
+      n05,
+      _UA,
+      { [_h4]: ["PUT", "/2015-03-31/functions/{FunctionName}/aliases/{Name}", 200] },
+      () => UpdateAliasRequest$,
+      () => AliasConfiguration$
+    ];
+    var UpdateCapacityProvider$ = [
+      9,
+      n05,
+      _UCP,
+      { [_h4]: ["PUT", "/2025-11-30/capacity-providers/{CapacityProviderName}", 202] },
+      () => UpdateCapacityProviderRequest$,
+      () => UpdateCapacityProviderResponse$
+    ];
+    var UpdateCodeSigningConfig$ = [
+      9,
+      n05,
+      _UCSC,
+      { [_h4]: ["PUT", "/2020-04-22/code-signing-configs/{CodeSigningConfigArn}", 200] },
+      () => UpdateCodeSigningConfigRequest$,
+      () => UpdateCodeSigningConfigResponse$
+    ];
+    var UpdateEventSourceMapping$ = [
+      9,
+      n05,
+      _UESM,
+      { [_h4]: ["PUT", "/2015-03-31/event-source-mappings/{UUID}", 202] },
+      () => UpdateEventSourceMappingRequest$,
+      () => EventSourceMappingConfiguration$
+    ];
+    var UpdateFunctionCode$ = [
+      9,
+      n05,
+      _UFC,
+      { [_h4]: ["PUT", "/2015-03-31/functions/{FunctionName}/code", 200] },
+      () => UpdateFunctionCodeRequest$,
+      () => FunctionConfiguration$
+    ];
+    var UpdateFunctionConfiguration$ = [
+      9,
+      n05,
+      _UFCp,
+      { [_h4]: ["PUT", "/2015-03-31/functions/{FunctionName}/configuration", 200] },
+      () => UpdateFunctionConfigurationRequest$,
+      () => FunctionConfiguration$
+    ];
+    var UpdateFunctionEventInvokeConfig$ = [
+      9,
+      n05,
+      _UFEIC,
+      { [_h4]: ["POST", "/2019-09-25/functions/{FunctionName}/event-invoke-config", 200] },
+      () => UpdateFunctionEventInvokeConfigRequest$,
+      () => FunctionEventInvokeConfig$
+    ];
+    var UpdateFunctionUrlConfig$ = [
+      9,
+      n05,
+      _UFUC,
+      { [_h4]: ["PUT", "/2021-10-31/functions/{FunctionName}/url", 200] },
+      () => UpdateFunctionUrlConfigRequest$,
+      () => UpdateFunctionUrlConfigResponse$
+    ];
+    var getRuntimeConfig$1 = (config) => {
+      return {
+        apiVersion: "2015-03-31",
+        base64Decoder: config?.base64Decoder ?? fromBase642,
+        base64Encoder: config?.base64Encoder ?? toBase643,
+        disableHostPrefix: config?.disableHostPrefix ?? false,
+        endpointProvider: config?.endpointProvider ?? defaultEndpointResolver5,
+        extensions: config?.extensions ?? [],
+        httpAuthSchemeProvider: config?.httpAuthSchemeProvider ?? defaultLambdaHttpAuthSchemeProvider,
+        httpAuthSchemes: config?.httpAuthSchemes ?? [
+          {
+            schemeId: "aws.auth#sigv4",
+            identityProvider: (ipc) => ipc.getIdentityProvider("aws.auth#sigv4"),
+            signer: new AwsSdkSigV4Signer2()
+          }
+        ],
+        logger: config?.logger ?? new NoOpLogger2(),
+        protocol: config?.protocol ?? AwsRestJsonProtocol2,
+        protocolSettings: config?.protocolSettings ?? {
+          defaultNamespace: "com.amazonaws.lambda",
+          errorTypeRegistries: errorTypeRegistries5,
+          version: "2015-03-31",
+          serviceTarget: "AWSGirApiService"
+        },
+        serviceId: config?.serviceId ?? "Lambda",
+        sha256: config?.sha256 ?? Sha256,
+        urlParser: config?.urlParser ?? parseUrl2,
+        utf8Decoder: config?.utf8Decoder ?? fromUtf83,
+        utf8Encoder: config?.utf8Encoder ?? toUtf83
+      };
+    };
+    var getRuntimeConfig9 = (config) => {
+      emitWarningIfUnsupportedVersion3(process.version);
+      const defaultsMode = resolveDefaultsModeConfig2(config);
+      const defaultConfigProvider = () => defaultsMode().then(loadConfigsForDefaultMode2);
+      const clientSharedValues = getRuntimeConfig$1(config);
+      emitWarningIfUnsupportedVersion$1(process.version);
+      const loaderConfig = {
+        profile: config?.profile,
+        logger: clientSharedValues.logger
+      };
+      return {
+        ...clientSharedValues,
+        ...config,
+        runtime: "node",
+        defaultsMode,
+        authSchemePreference: config?.authSchemePreference ?? loadConfig2(NODE_AUTH_SCHEME_PREFERENCE_OPTIONS2, loaderConfig),
+        bodyLengthChecker: config?.bodyLengthChecker ?? calculateBodyLength2,
+        credentialDefaultProvider: config?.credentialDefaultProvider ?? defaultProvider,
+        defaultUserAgentProvider: config?.defaultUserAgentProvider ?? createDefaultUserAgentProvider2({ serviceId: clientSharedValues.serviceId, clientVersion: packageInfo.version }),
+        eventStreamSerdeProvider: config?.eventStreamSerdeProvider ?? eventStreamSerdeProvider3,
+        maxAttempts: config?.maxAttempts ?? loadConfig2(NODE_MAX_ATTEMPT_CONFIG_OPTIONS2, config),
+        region: config?.region ?? loadConfig2(NODE_REGION_CONFIG_OPTIONS2, { ...NODE_REGION_CONFIG_FILE_OPTIONS2, ...loaderConfig }),
+        requestHandler: NodeHttpHandler.create(config?.requestHandler ?? defaultConfigProvider),
+        retryMode: config?.retryMode ?? loadConfig2({
+          ...NODE_RETRY_MODE_CONFIG_OPTIONS2,
+          default: async () => (await defaultConfigProvider()).retryMode || DEFAULT_RETRY_MODE2
+        }, config),
+        streamCollector: config?.streamCollector ?? streamCollector7,
+        useDualstackEndpoint: config?.useDualstackEndpoint ?? loadConfig2(NODE_USE_DUALSTACK_ENDPOINT_CONFIG_OPTIONS2, loaderConfig),
+        useFipsEndpoint: config?.useFipsEndpoint ?? loadConfig2(NODE_USE_FIPS_ENDPOINT_CONFIG_OPTIONS2, loaderConfig),
+        userAgentAppId: config?.userAgentAppId ?? loadConfig2(NODE_APP_ID_CONFIG_OPTIONS2, loaderConfig)
+      };
+    };
+    var getHttpAuthExtensionConfiguration5 = (runtimeConfig) => {
+      const _httpAuthSchemes = runtimeConfig.httpAuthSchemes;
+      let _httpAuthSchemeProvider = runtimeConfig.httpAuthSchemeProvider;
+      let _credentials = runtimeConfig.credentials;
+      return {
+        setHttpAuthScheme(httpAuthScheme) {
+          const index = _httpAuthSchemes.findIndex((scheme) => scheme.schemeId === httpAuthScheme.schemeId);
+          if (index === -1) {
+            _httpAuthSchemes.push(httpAuthScheme);
+          } else {
+            _httpAuthSchemes.splice(index, 1, httpAuthScheme);
+          }
+        },
+        httpAuthSchemes() {
+          return _httpAuthSchemes;
+        },
+        setHttpAuthSchemeProvider(httpAuthSchemeProvider) {
+          _httpAuthSchemeProvider = httpAuthSchemeProvider;
+        },
+        httpAuthSchemeProvider() {
+          return _httpAuthSchemeProvider;
+        },
+        setCredentials(credentials) {
+          _credentials = credentials;
+        },
+        credentials() {
+          return _credentials;
+        }
+      };
+    };
+    var resolveHttpAuthRuntimeConfig5 = (config) => {
+      return {
+        httpAuthSchemes: config.httpAuthSchemes(),
+        httpAuthSchemeProvider: config.httpAuthSchemeProvider(),
+        credentials: config.credentials()
+      };
+    };
+    var resolveRuntimeExtensions5 = (runtimeConfig, extensions) => {
+      const extensionConfiguration = Object.assign(getAwsRegionExtensionConfiguration2(runtimeConfig), getDefaultExtensionConfiguration2(runtimeConfig), getHttpHandlerExtensionConfiguration2(runtimeConfig), getHttpAuthExtensionConfiguration5(runtimeConfig));
+      extensions.forEach((extension) => extension.configure(extensionConfiguration));
+      return Object.assign(runtimeConfig, resolveAwsRegionExtensionConfiguration2(extensionConfiguration), resolveDefaultRuntimeConfig2(extensionConfiguration), resolveHttpHandlerRuntimeConfig2(extensionConfiguration), resolveHttpAuthRuntimeConfig5(extensionConfiguration));
+    };
+    var LambdaClient2 = class extends Client2 {
+      config;
+      constructor(...[configuration]) {
+        const _config_0 = getRuntimeConfig9(configuration || {});
+        super(_config_0);
+        this.initConfig = _config_0;
+        const _config_1 = resolveClientEndpointParameters5(_config_0);
+        const _config_2 = resolveUserAgentConfig2(_config_1);
+        const _config_3 = resolveRetryConfig2(_config_2);
+        const _config_4 = resolveRegionConfig2(_config_3);
+        const _config_5 = resolveHostHeaderConfig2(_config_4);
+        const _config_6 = resolveEndpointConfig2(_config_5);
+        const _config_7 = resolveEventStreamSerdeConfig2(_config_6);
+        const _config_8 = resolveHttpAuthSchemeConfig5(_config_7);
+        const _config_9 = resolveRuntimeExtensions5(_config_8, configuration?.extensions || []);
+        this.config = _config_9;
+        this.middlewareStack.use(getSchemaSerdePlugin2(this.config));
+        this.middlewareStack.use(getUserAgentPlugin2(this.config));
+        this.middlewareStack.use(getRetryPlugin2(this.config));
+        this.middlewareStack.use(getContentLengthPlugin2(this.config));
+        this.middlewareStack.use(getHostHeaderPlugin2(this.config));
+        this.middlewareStack.use(getLoggerPlugin2(this.config));
+        this.middlewareStack.use(getRecursionDetectionPlugin2(this.config));
+        this.middlewareStack.use(getHttpAuthSchemeEndpointRuleSetPlugin2(this.config, {
+          httpAuthSchemeParametersProvider: defaultLambdaHttpAuthSchemeParametersProvider,
+          identityProviderConfigProvider: async (config) => new DefaultIdentityProviderConfig2({
+            "aws.auth#sigv4": config.credentials
+          })
+        }));
+        this.middlewareStack.use(getHttpSigningPlugin2(this.config));
+      }
+      destroy() {
+        super.destroy();
+      }
+    };
+    var command5 = makeBuilder2(commonParams5, "AWSGirApiService", "LambdaClient", getEndpointPlugin2);
+    var _ep05 = {};
+    var _mw05 = (Command2, cs, config, o3) => [];
+    var AddLayerVersionPermissionCommand = class extends command5(_ep05, _mw05, "AddLayerVersionPermission", AddLayerVersionPermission$) {
+    };
+    var AddPermissionCommand = class extends command5(_ep05, _mw05, "AddPermission", AddPermission$) {
+    };
+    var CheckpointDurableExecutionCommand = class extends command5(_ep05, _mw05, "CheckpointDurableExecution", CheckpointDurableExecution$) {
+    };
+    var CreateAliasCommand = class extends command5(_ep05, _mw05, "CreateAlias", CreateAlias$) {
+    };
+    var CreateCapacityProviderCommand = class extends command5(_ep05, _mw05, "CreateCapacityProvider", CreateCapacityProvider$) {
+    };
+    var CreateCodeSigningConfigCommand = class extends command5(_ep05, _mw05, "CreateCodeSigningConfig", CreateCodeSigningConfig$) {
+    };
+    var CreateEventSourceMappingCommand = class extends command5(_ep05, _mw05, "CreateEventSourceMapping", CreateEventSourceMapping$) {
+    };
+    var CreateFunctionCommand = class extends command5(_ep05, _mw05, "CreateFunction", CreateFunction$) {
+    };
+    var CreateFunctionUrlConfigCommand = class extends command5(_ep05, _mw05, "CreateFunctionUrlConfig", CreateFunctionUrlConfig$) {
+    };
+    var DeleteAliasCommand = class extends command5(_ep05, _mw05, "DeleteAlias", DeleteAlias$) {
+    };
+    var DeleteCapacityProviderCommand = class extends command5(_ep05, _mw05, "DeleteCapacityProvider", DeleteCapacityProvider$) {
+    };
+    var DeleteCodeSigningConfigCommand = class extends command5(_ep05, _mw05, "DeleteCodeSigningConfig", DeleteCodeSigningConfig$) {
+    };
+    var DeleteEventSourceMappingCommand = class extends command5(_ep05, _mw05, "DeleteEventSourceMapping", DeleteEventSourceMapping$) {
+    };
+    var DeleteFunctionCodeSigningConfigCommand = class extends command5(_ep05, _mw05, "DeleteFunctionCodeSigningConfig", DeleteFunctionCodeSigningConfig$) {
+    };
+    var DeleteFunctionCommand = class extends command5(_ep05, _mw05, "DeleteFunction", DeleteFunction$) {
+    };
+    var DeleteFunctionConcurrencyCommand = class extends command5(_ep05, _mw05, "DeleteFunctionConcurrency", DeleteFunctionConcurrency$) {
+    };
+    var DeleteFunctionEventInvokeConfigCommand = class extends command5(_ep05, _mw05, "DeleteFunctionEventInvokeConfig", DeleteFunctionEventInvokeConfig$) {
+    };
+    var DeleteFunctionUrlConfigCommand = class extends command5(_ep05, _mw05, "DeleteFunctionUrlConfig", DeleteFunctionUrlConfig$) {
+    };
+    var DeleteLayerVersionCommand = class extends command5(_ep05, _mw05, "DeleteLayerVersion", DeleteLayerVersion$) {
+    };
+    var DeleteProvisionedConcurrencyConfigCommand = class extends command5(_ep05, _mw05, "DeleteProvisionedConcurrencyConfig", DeleteProvisionedConcurrencyConfig$) {
+    };
+    var GetAccountSettingsCommand = class extends command5(_ep05, _mw05, "GetAccountSettings", GetAccountSettings$) {
+    };
+    var GetAliasCommand = class extends command5(_ep05, _mw05, "GetAlias", GetAlias$) {
+    };
+    var GetCapacityProviderCommand = class extends command5(_ep05, _mw05, "GetCapacityProvider", GetCapacityProvider$) {
+    };
+    var GetCodeSigningConfigCommand = class extends command5(_ep05, _mw05, "GetCodeSigningConfig", GetCodeSigningConfig$) {
+    };
+    var GetDurableExecutionCommand = class extends command5(_ep05, _mw05, "GetDurableExecution", GetDurableExecution$) {
+    };
+    var GetDurableExecutionHistoryCommand = class extends command5(_ep05, _mw05, "GetDurableExecutionHistory", GetDurableExecutionHistory$) {
+    };
+    var GetDurableExecutionStateCommand = class extends command5(_ep05, _mw05, "GetDurableExecutionState", GetDurableExecutionState$) {
+    };
+    var GetEventSourceMappingCommand = class extends command5(_ep05, _mw05, "GetEventSourceMapping", GetEventSourceMapping$) {
+    };
+    var GetFunctionCodeSigningConfigCommand = class extends command5(_ep05, _mw05, "GetFunctionCodeSigningConfig", GetFunctionCodeSigningConfig$) {
+    };
+    var GetFunctionCommand = class extends command5(_ep05, _mw05, "GetFunction", GetFunction$) {
+    };
+    var GetFunctionConcurrencyCommand = class extends command5(_ep05, _mw05, "GetFunctionConcurrency", GetFunctionConcurrency$) {
+    };
+    var GetFunctionConfigurationCommand = class extends command5(_ep05, _mw05, "GetFunctionConfiguration", GetFunctionConfiguration$) {
+    };
+    var GetFunctionEventInvokeConfigCommand = class extends command5(_ep05, _mw05, "GetFunctionEventInvokeConfig", GetFunctionEventInvokeConfig$) {
+    };
+    var GetFunctionRecursionConfigCommand = class extends command5(_ep05, _mw05, "GetFunctionRecursionConfig", GetFunctionRecursionConfig$) {
+    };
+    var GetFunctionScalingConfigCommand = class extends command5(_ep05, _mw05, "GetFunctionScalingConfig", GetFunctionScalingConfig$) {
+    };
+    var GetFunctionUrlConfigCommand = class extends command5(_ep05, _mw05, "GetFunctionUrlConfig", GetFunctionUrlConfig$) {
+    };
+    var GetLayerVersionByArnCommand = class extends command5(_ep05, _mw05, "GetLayerVersionByArn", GetLayerVersionByArn$) {
+    };
+    var GetLayerVersionCommand = class extends command5(_ep05, _mw05, "GetLayerVersion", GetLayerVersion$) {
+    };
+    var GetLayerVersionPolicyCommand = class extends command5(_ep05, _mw05, "GetLayerVersionPolicy", GetLayerVersionPolicy$) {
+    };
+    var GetPolicyCommand = class extends command5(_ep05, _mw05, "GetPolicy", GetPolicy$) {
+    };
+    var GetProvisionedConcurrencyConfigCommand = class extends command5(_ep05, _mw05, "GetProvisionedConcurrencyConfig", GetProvisionedConcurrencyConfig$) {
+    };
+    var GetRuntimeManagementConfigCommand = class extends command5(_ep05, _mw05, "GetRuntimeManagementConfig", GetRuntimeManagementConfig$) {
+    };
+    var InvokeAsyncCommand = class extends command5(_ep05, _mw05, "InvokeAsync", InvokeAsync$) {
+    };
+    var InvokeCommand2 = class extends command5(_ep05, _mw05, "Invoke", Invoke$) {
+    };
+    var InvokeWithResponseStreamCommand = class extends command5(_ep05, _mw05, "InvokeWithResponseStream", InvokeWithResponseStream$) {
+    };
+    var ListAliasesCommand = class extends command5(_ep05, _mw05, "ListAliases", ListAliases$) {
+    };
+    var ListCapacityProvidersCommand = class extends command5(_ep05, _mw05, "ListCapacityProviders", ListCapacityProviders$) {
+    };
+    var ListCodeSigningConfigsCommand = class extends command5(_ep05, _mw05, "ListCodeSigningConfigs", ListCodeSigningConfigs$) {
+    };
+    var ListDurableExecutionsByFunctionCommand = class extends command5(_ep05, _mw05, "ListDurableExecutionsByFunction", ListDurableExecutionsByFunction$) {
+    };
+    var ListEventSourceMappingsCommand = class extends command5(_ep05, _mw05, "ListEventSourceMappings", ListEventSourceMappings$) {
+    };
+    var ListFunctionEventInvokeConfigsCommand = class extends command5(_ep05, _mw05, "ListFunctionEventInvokeConfigs", ListFunctionEventInvokeConfigs$) {
+    };
+    var ListFunctionsByCodeSigningConfigCommand = class extends command5(_ep05, _mw05, "ListFunctionsByCodeSigningConfig", ListFunctionsByCodeSigningConfig$) {
+    };
+    var ListFunctionsCommand = class extends command5(_ep05, _mw05, "ListFunctions", ListFunctions$) {
+    };
+    var ListFunctionUrlConfigsCommand = class extends command5(_ep05, _mw05, "ListFunctionUrlConfigs", ListFunctionUrlConfigs$) {
+    };
+    var ListFunctionVersionsByCapacityProviderCommand = class extends command5(_ep05, _mw05, "ListFunctionVersionsByCapacityProvider", ListFunctionVersionsByCapacityProvider$) {
+    };
+    var ListLayersCommand = class extends command5(_ep05, _mw05, "ListLayers", ListLayers$) {
+    };
+    var ListLayerVersionsCommand = class extends command5(_ep05, _mw05, "ListLayerVersions", ListLayerVersions$) {
+    };
+    var ListProvisionedConcurrencyConfigsCommand = class extends command5(_ep05, _mw05, "ListProvisionedConcurrencyConfigs", ListProvisionedConcurrencyConfigs$) {
+    };
+    var ListTagsCommand = class extends command5(_ep05, _mw05, "ListTags", ListTags$) {
+    };
+    var ListVersionsByFunctionCommand = class extends command5(_ep05, _mw05, "ListVersionsByFunction", ListVersionsByFunction$) {
+    };
+    var PublishLayerVersionCommand = class extends command5(_ep05, _mw05, "PublishLayerVersion", PublishLayerVersion$) {
+    };
+    var PublishVersionCommand = class extends command5(_ep05, _mw05, "PublishVersion", PublishVersion$) {
+    };
+    var PutFunctionCodeSigningConfigCommand = class extends command5(_ep05, _mw05, "PutFunctionCodeSigningConfig", PutFunctionCodeSigningConfig$) {
+    };
+    var PutFunctionConcurrencyCommand = class extends command5(_ep05, _mw05, "PutFunctionConcurrency", PutFunctionConcurrency$) {
+    };
+    var PutFunctionEventInvokeConfigCommand = class extends command5(_ep05, _mw05, "PutFunctionEventInvokeConfig", PutFunctionEventInvokeConfig$) {
+    };
+    var PutFunctionRecursionConfigCommand = class extends command5(_ep05, _mw05, "PutFunctionRecursionConfig", PutFunctionRecursionConfig$) {
+    };
+    var PutFunctionScalingConfigCommand = class extends command5(_ep05, _mw05, "PutFunctionScalingConfig", PutFunctionScalingConfig$) {
+    };
+    var PutProvisionedConcurrencyConfigCommand = class extends command5(_ep05, _mw05, "PutProvisionedConcurrencyConfig", PutProvisionedConcurrencyConfig$) {
+    };
+    var PutRuntimeManagementConfigCommand = class extends command5(_ep05, _mw05, "PutRuntimeManagementConfig", PutRuntimeManagementConfig$) {
+    };
+    var RemoveLayerVersionPermissionCommand = class extends command5(_ep05, _mw05, "RemoveLayerVersionPermission", RemoveLayerVersionPermission$) {
+    };
+    var RemovePermissionCommand = class extends command5(_ep05, _mw05, "RemovePermission", RemovePermission$) {
+    };
+    var SendDurableExecutionCallbackFailureCommand = class extends command5(_ep05, _mw05, "SendDurableExecutionCallbackFailure", SendDurableExecutionCallbackFailure$) {
+    };
+    var SendDurableExecutionCallbackHeartbeatCommand = class extends command5(_ep05, _mw05, "SendDurableExecutionCallbackHeartbeat", SendDurableExecutionCallbackHeartbeat$) {
+    };
+    var SendDurableExecutionCallbackSuccessCommand = class extends command5(_ep05, _mw05, "SendDurableExecutionCallbackSuccess", SendDurableExecutionCallbackSuccess$) {
+    };
+    var StopDurableExecutionCommand = class extends command5(_ep05, _mw05, "StopDurableExecution", StopDurableExecution$) {
+    };
+    var TagResourceCommand = class extends command5(_ep05, _mw05, "TagResource", TagResource$) {
+    };
+    var UntagResourceCommand = class extends command5(_ep05, _mw05, "UntagResource", UntagResource$) {
+    };
+    var UpdateAliasCommand = class extends command5(_ep05, _mw05, "UpdateAlias", UpdateAlias$) {
+    };
+    var UpdateCapacityProviderCommand = class extends command5(_ep05, _mw05, "UpdateCapacityProvider", UpdateCapacityProvider$) {
+    };
+    var UpdateCodeSigningConfigCommand = class extends command5(_ep05, _mw05, "UpdateCodeSigningConfig", UpdateCodeSigningConfig$) {
+    };
+    var UpdateEventSourceMappingCommand = class extends command5(_ep05, _mw05, "UpdateEventSourceMapping", UpdateEventSourceMapping$) {
+    };
+    var UpdateFunctionCodeCommand = class extends command5(_ep05, _mw05, "UpdateFunctionCode", UpdateFunctionCode$) {
+    };
+    var UpdateFunctionConfigurationCommand = class extends command5(_ep05, _mw05, "UpdateFunctionConfiguration", UpdateFunctionConfiguration$) {
+    };
+    var UpdateFunctionEventInvokeConfigCommand = class extends command5(_ep05, _mw05, "UpdateFunctionEventInvokeConfig", UpdateFunctionEventInvokeConfig$) {
+    };
+    var UpdateFunctionUrlConfigCommand = class extends command5(_ep05, _mw05, "UpdateFunctionUrlConfig", UpdateFunctionUrlConfig$) {
+    };
+    var paginateGetDurableExecutionHistory = createPaginator2(LambdaClient2, GetDurableExecutionHistoryCommand, "Marker", "NextMarker", "MaxItems");
+    var paginateGetDurableExecutionState = createPaginator2(LambdaClient2, GetDurableExecutionStateCommand, "Marker", "NextMarker", "MaxItems");
+    var paginateListAliases = createPaginator2(LambdaClient2, ListAliasesCommand, "Marker", "NextMarker", "MaxItems");
+    var paginateListCapacityProviders = createPaginator2(LambdaClient2, ListCapacityProvidersCommand, "Marker", "NextMarker", "MaxItems");
+    var paginateListCodeSigningConfigs = createPaginator2(LambdaClient2, ListCodeSigningConfigsCommand, "Marker", "NextMarker", "MaxItems");
+    var paginateListDurableExecutionsByFunction = createPaginator2(LambdaClient2, ListDurableExecutionsByFunctionCommand, "Marker", "NextMarker", "MaxItems");
+    var paginateListEventSourceMappings = createPaginator2(LambdaClient2, ListEventSourceMappingsCommand, "Marker", "NextMarker", "MaxItems");
+    var paginateListFunctionEventInvokeConfigs = createPaginator2(LambdaClient2, ListFunctionEventInvokeConfigsCommand, "Marker", "NextMarker", "MaxItems");
+    var paginateListFunctionsByCodeSigningConfig = createPaginator2(LambdaClient2, ListFunctionsByCodeSigningConfigCommand, "Marker", "NextMarker", "MaxItems");
+    var paginateListFunctions = createPaginator2(LambdaClient2, ListFunctionsCommand, "Marker", "NextMarker", "MaxItems");
+    var paginateListFunctionUrlConfigs = createPaginator2(LambdaClient2, ListFunctionUrlConfigsCommand, "Marker", "NextMarker", "MaxItems");
+    var paginateListFunctionVersionsByCapacityProvider = createPaginator2(LambdaClient2, ListFunctionVersionsByCapacityProviderCommand, "Marker", "NextMarker", "MaxItems");
+    var paginateListLayers = createPaginator2(LambdaClient2, ListLayersCommand, "Marker", "NextMarker", "MaxItems");
+    var paginateListLayerVersions = createPaginator2(LambdaClient2, ListLayerVersionsCommand, "Marker", "NextMarker", "MaxItems");
+    var paginateListProvisionedConcurrencyConfigs = createPaginator2(LambdaClient2, ListProvisionedConcurrencyConfigsCommand, "Marker", "NextMarker", "MaxItems");
+    var paginateListVersionsByFunction = createPaginator2(LambdaClient2, ListVersionsByFunctionCommand, "Marker", "NextMarker", "MaxItems");
+    var checkState$5 = async (client, input) => {
+      let reason;
+      try {
+        let result = await client.send(new GetFunctionConfigurationCommand(input));
+        reason = result;
+        try {
+          const returnComparator = () => {
+            return result.State;
+          };
+          if (returnComparator() === "Active") {
+            return { state: WaiterState2.SUCCESS, reason };
+          }
+        } catch (e6) {
+        }
+        try {
+          const returnComparator = () => {
+            return result.State;
+          };
+          if (returnComparator() === "Failed") {
+            return { state: WaiterState2.FAILURE, reason };
+          }
+        } catch (e6) {
+        }
+        try {
+          const returnComparator = () => {
+            return result.State;
+          };
+          if (returnComparator() === "Pending") {
+            return { state: WaiterState2.RETRY, reason };
+          }
+        } catch (e6) {
+        }
+      } catch (exception) {
+        reason = exception;
+      }
+      return { state: WaiterState2.RETRY, reason };
+    };
+    var waitForFunctionActive = async (params, input) => {
+      const serviceDefaults = { minDelay: 5, maxDelay: 300 };
+      return createWaiter2({ ...serviceDefaults, ...params }, input, checkState$5);
+    };
+    var waitUntilFunctionActive = async (params, input) => {
+      const serviceDefaults = { minDelay: 5, maxDelay: 300 };
+      const result = await createWaiter2({ ...serviceDefaults, ...params }, input, checkState$5);
+      return checkExceptions2(result);
+    };
+    var checkState$4 = async (client, input) => {
+      let reason;
+      try {
+        let result = await client.send(new GetFunctionCommand(input));
+        reason = result;
+        try {
+          const returnComparator = () => {
+            return result.Configuration.State;
+          };
+          if (returnComparator() === "Active") {
+            return { state: WaiterState2.SUCCESS, reason };
+          }
+        } catch (e6) {
+        }
+        try {
+          const returnComparator = () => {
+            return result.Configuration.State;
+          };
+          if (returnComparator() === "Failed") {
+            return { state: WaiterState2.FAILURE, reason };
+          }
+        } catch (e6) {
+        }
+        try {
+          const returnComparator = () => {
+            return result.Configuration.State;
+          };
+          if (returnComparator() === "Pending") {
+            return { state: WaiterState2.RETRY, reason };
+          }
+        } catch (e6) {
+        }
+      } catch (exception) {
+        reason = exception;
+      }
+      return { state: WaiterState2.RETRY, reason };
+    };
+    var waitForFunctionActiveV2 = async (params, input) => {
+      const serviceDefaults = { minDelay: 1, maxDelay: 300 };
+      return createWaiter2({ ...serviceDefaults, ...params }, input, checkState$4);
+    };
+    var waitUntilFunctionActiveV2 = async (params, input) => {
+      const serviceDefaults = { minDelay: 1, maxDelay: 300 };
+      const result = await createWaiter2({ ...serviceDefaults, ...params }, input, checkState$4);
+      return checkExceptions2(result);
+    };
+    var checkState$3 = async (client, input) => {
+      let reason;
+      try {
+        let result = await client.send(new GetFunctionCommand(input));
+        reason = result;
+        return { state: WaiterState2.SUCCESS, reason };
+      } catch (exception) {
+        reason = exception;
+        if (exception.name === "ResourceNotFoundException") {
+          return { state: WaiterState2.RETRY, reason };
+        }
+      }
+      return { state: WaiterState2.RETRY, reason };
+    };
+    var waitForFunctionExists = async (params, input) => {
+      const serviceDefaults = { minDelay: 1, maxDelay: 20 };
+      return createWaiter2({ ...serviceDefaults, ...params }, input, checkState$3);
+    };
+    var waitUntilFunctionExists = async (params, input) => {
+      const serviceDefaults = { minDelay: 1, maxDelay: 20 };
+      const result = await createWaiter2({ ...serviceDefaults, ...params }, input, checkState$3);
+      return checkExceptions2(result);
+    };
+    var checkState$2 = async (client, input) => {
+      let reason;
+      try {
+        let result = await client.send(new GetFunctionConfigurationCommand(input));
+        reason = result;
+        try {
+          const returnComparator = () => {
+            return result.LastUpdateStatus;
+          };
+          if (returnComparator() === "Successful") {
+            return { state: WaiterState2.SUCCESS, reason };
+          }
+        } catch (e6) {
+        }
+        try {
+          const returnComparator = () => {
+            return result.LastUpdateStatus;
+          };
+          if (returnComparator() === "Failed") {
+            return { state: WaiterState2.FAILURE, reason };
+          }
+        } catch (e6) {
+        }
+        try {
+          const returnComparator = () => {
+            return result.LastUpdateStatus;
+          };
+          if (returnComparator() === "InProgress") {
+            return { state: WaiterState2.RETRY, reason };
+          }
+        } catch (e6) {
+        }
+      } catch (exception) {
+        reason = exception;
+      }
+      return { state: WaiterState2.RETRY, reason };
+    };
+    var waitForFunctionUpdated = async (params, input) => {
+      const serviceDefaults = { minDelay: 5, maxDelay: 300 };
+      return createWaiter2({ ...serviceDefaults, ...params }, input, checkState$2);
+    };
+    var waitUntilFunctionUpdated = async (params, input) => {
+      const serviceDefaults = { minDelay: 5, maxDelay: 300 };
+      const result = await createWaiter2({ ...serviceDefaults, ...params }, input, checkState$2);
+      return checkExceptions2(result);
+    };
+    var checkState$1 = async (client, input) => {
+      let reason;
+      try {
+        let result = await client.send(new GetFunctionCommand(input));
+        reason = result;
+        try {
+          const returnComparator = () => {
+            return result.Configuration.LastUpdateStatus;
+          };
+          if (returnComparator() === "Successful") {
+            return { state: WaiterState2.SUCCESS, reason };
+          }
+        } catch (e6) {
+        }
+        try {
+          const returnComparator = () => {
+            return result.Configuration.LastUpdateStatus;
+          };
+          if (returnComparator() === "Failed") {
+            return { state: WaiterState2.FAILURE, reason };
+          }
+        } catch (e6) {
+        }
+        try {
+          const returnComparator = () => {
+            return result.Configuration.LastUpdateStatus;
+          };
+          if (returnComparator() === "InProgress") {
+            return { state: WaiterState2.RETRY, reason };
+          }
+        } catch (e6) {
+        }
+      } catch (exception) {
+        reason = exception;
+      }
+      return { state: WaiterState2.RETRY, reason };
+    };
+    var waitForFunctionUpdatedV2 = async (params, input) => {
+      const serviceDefaults = { minDelay: 1, maxDelay: 300 };
+      return createWaiter2({ ...serviceDefaults, ...params }, input, checkState$1);
+    };
+    var waitUntilFunctionUpdatedV2 = async (params, input) => {
+      const serviceDefaults = { minDelay: 1, maxDelay: 300 };
+      const result = await createWaiter2({ ...serviceDefaults, ...params }, input, checkState$1);
+      return checkExceptions2(result);
+    };
+    var checkState = async (client, input) => {
+      let reason;
+      try {
+        let result = await client.send(new GetFunctionConfigurationCommand(input));
+        reason = result;
+        try {
+          const returnComparator = () => {
+            return result.State;
+          };
+          if (returnComparator() === "Active") {
+            return { state: WaiterState2.SUCCESS, reason };
+          }
+        } catch (e6) {
+        }
+        try {
+          const returnComparator = () => {
+            return result.State;
+          };
+          if (returnComparator() === "Failed") {
+            return { state: WaiterState2.FAILURE, reason };
+          }
+        } catch (e6) {
+        }
+        try {
+          const returnComparator = () => {
+            return result.State;
+          };
+          if (returnComparator() === "Pending") {
+            return { state: WaiterState2.RETRY, reason };
+          }
+        } catch (e6) {
+        }
+      } catch (exception) {
+        reason = exception;
+      }
+      return { state: WaiterState2.RETRY, reason };
+    };
+    var waitForPublishedVersionActive = async (params, input) => {
+      const serviceDefaults = { minDelay: 5, maxDelay: 1560 };
+      return createWaiter2({ ...serviceDefaults, ...params }, input, checkState);
+    };
+    var waitUntilPublishedVersionActive = async (params, input) => {
+      const serviceDefaults = { minDelay: 5, maxDelay: 1560 };
+      const result = await createWaiter2({ ...serviceDefaults, ...params }, input, checkState);
+      return checkExceptions2(result);
+    };
+    var commands5 = {
+      AddLayerVersionPermissionCommand,
+      AddPermissionCommand,
+      CheckpointDurableExecutionCommand,
+      CreateAliasCommand,
+      CreateCapacityProviderCommand,
+      CreateCodeSigningConfigCommand,
+      CreateEventSourceMappingCommand,
+      CreateFunctionCommand,
+      CreateFunctionUrlConfigCommand,
+      DeleteAliasCommand,
+      DeleteCapacityProviderCommand,
+      DeleteCodeSigningConfigCommand,
+      DeleteEventSourceMappingCommand,
+      DeleteFunctionCommand,
+      DeleteFunctionCodeSigningConfigCommand,
+      DeleteFunctionConcurrencyCommand,
+      DeleteFunctionEventInvokeConfigCommand,
+      DeleteFunctionUrlConfigCommand,
+      DeleteLayerVersionCommand,
+      DeleteProvisionedConcurrencyConfigCommand,
+      GetAccountSettingsCommand,
+      GetAliasCommand,
+      GetCapacityProviderCommand,
+      GetCodeSigningConfigCommand,
+      GetDurableExecutionCommand,
+      GetDurableExecutionHistoryCommand,
+      GetDurableExecutionStateCommand,
+      GetEventSourceMappingCommand,
+      GetFunctionCommand,
+      GetFunctionCodeSigningConfigCommand,
+      GetFunctionConcurrencyCommand,
+      GetFunctionConfigurationCommand,
+      GetFunctionEventInvokeConfigCommand,
+      GetFunctionRecursionConfigCommand,
+      GetFunctionScalingConfigCommand,
+      GetFunctionUrlConfigCommand,
+      GetLayerVersionCommand,
+      GetLayerVersionByArnCommand,
+      GetLayerVersionPolicyCommand,
+      GetPolicyCommand,
+      GetProvisionedConcurrencyConfigCommand,
+      GetRuntimeManagementConfigCommand,
+      InvokeCommand: InvokeCommand2,
+      InvokeAsyncCommand,
+      InvokeWithResponseStreamCommand,
+      ListAliasesCommand,
+      ListCapacityProvidersCommand,
+      ListCodeSigningConfigsCommand,
+      ListDurableExecutionsByFunctionCommand,
+      ListEventSourceMappingsCommand,
+      ListFunctionEventInvokeConfigsCommand,
+      ListFunctionsCommand,
+      ListFunctionsByCodeSigningConfigCommand,
+      ListFunctionUrlConfigsCommand,
+      ListFunctionVersionsByCapacityProviderCommand,
+      ListLayersCommand,
+      ListLayerVersionsCommand,
+      ListProvisionedConcurrencyConfigsCommand,
+      ListTagsCommand,
+      ListVersionsByFunctionCommand,
+      PublishLayerVersionCommand,
+      PublishVersionCommand,
+      PutFunctionCodeSigningConfigCommand,
+      PutFunctionConcurrencyCommand,
+      PutFunctionEventInvokeConfigCommand,
+      PutFunctionRecursionConfigCommand,
+      PutFunctionScalingConfigCommand,
+      PutProvisionedConcurrencyConfigCommand,
+      PutRuntimeManagementConfigCommand,
+      RemoveLayerVersionPermissionCommand,
+      RemovePermissionCommand,
+      SendDurableExecutionCallbackFailureCommand,
+      SendDurableExecutionCallbackHeartbeatCommand,
+      SendDurableExecutionCallbackSuccessCommand,
+      StopDurableExecutionCommand,
+      TagResourceCommand,
+      UntagResourceCommand,
+      UpdateAliasCommand,
+      UpdateCapacityProviderCommand,
+      UpdateCodeSigningConfigCommand,
+      UpdateEventSourceMappingCommand,
+      UpdateFunctionCodeCommand,
+      UpdateFunctionConfigurationCommand,
+      UpdateFunctionEventInvokeConfigCommand,
+      UpdateFunctionUrlConfigCommand
+    };
+    var paginators = {
+      paginateGetDurableExecutionHistory,
+      paginateGetDurableExecutionState,
+      paginateListAliases,
+      paginateListCapacityProviders,
+      paginateListCodeSigningConfigs,
+      paginateListDurableExecutionsByFunction,
+      paginateListEventSourceMappings,
+      paginateListFunctionEventInvokeConfigs,
+      paginateListFunctions,
+      paginateListFunctionsByCodeSigningConfig,
+      paginateListFunctionUrlConfigs,
+      paginateListFunctionVersionsByCapacityProvider,
+      paginateListLayers,
+      paginateListLayerVersions,
+      paginateListProvisionedConcurrencyConfigs,
+      paginateListVersionsByFunction
+    };
+    var waiters = {
+      waitUntilFunctionActiveV2,
+      waitUntilFunctionExists,
+      waitUntilFunctionUpdatedV2,
+      waitUntilFunctionActive,
+      waitUntilFunctionUpdated,
+      waitUntilPublishedVersionActive
+    };
+    var Lambda = class extends LambdaClient2 {
+    };
+    createAggregatedClient2(commands5, Lambda, { paginators, waiters });
+    var ThrottleReason = {
+      CallerRateLimitExceeded: "CallerRateLimitExceeded",
+      ConcurrentInvocationLimitExceeded: "ConcurrentInvocationLimitExceeded",
+      ConcurrentSnapshotCreateLimitExceeded: "ConcurrentSnapshotCreateLimitExceeded",
+      FunctionInvocationRateLimitExceeded: "FunctionInvocationRateLimitExceeded",
+      ReservedFunctionConcurrentInvocationLimitExceeded: "ReservedFunctionConcurrentInvocationLimitExceeded",
+      ReservedFunctionInvocationRateLimitExceeded: "ReservedFunctionInvocationRateLimitExceeded"
+    };
+    var FunctionUrlAuthType = {
+      AWS_IAM: "AWS_IAM",
+      NONE: "NONE"
+    };
+    var KafkaSchemaRegistryAuthType = {
+      BASIC_AUTH: "BASIC_AUTH",
+      CLIENT_CERTIFICATE_TLS_AUTH: "CLIENT_CERTIFICATE_TLS_AUTH",
+      SERVER_ROOT_CA_CERTIFICATE: "SERVER_ROOT_CA_CERTIFICATE"
+    };
+    var SchemaRegistryEventRecordFormat = {
+      JSON: "JSON",
+      SOURCE: "SOURCE"
+    };
+    var KafkaSchemaValidationAttribute = {
+      KEY: "KEY",
+      VALUE: "VALUE"
+    };
+    var ApplicationLogLevel = {
+      Debug: "DEBUG",
+      Error: "ERROR",
+      Fatal: "FATAL",
+      Info: "INFO",
+      Trace: "TRACE",
+      Warn: "WARN"
+    };
+    var Architecture = {
+      arm64: "arm64",
+      x86_64: "x86_64"
+    };
+    var CapacityProviderScalingMode = {
+      Auto: "Auto",
+      Manual: "Manual"
+    };
+    var CapacityProviderPredefinedMetricType = {
+      LambdaCapacityProviderAverageCPUUtilization: "LambdaCapacityProviderAverageCPUUtilization"
+    };
+    var PropagateTagsMode = {
+      Explicit: "Explicit",
+      None: "None"
+    };
+    var SystemLogLevel = {
+      Debug: "DEBUG",
+      Info: "INFO",
+      Warn: "WARN"
+    };
+    var CapacityProviderState = {
+      Active: "Active",
+      Deleting: "Deleting",
+      Failed: "Failed",
+      Pending: "Pending"
+    };
+    var State = {
+      Active: "Active",
+      ActiveNonInvocable: "ActiveNonInvocable",
+      Deactivated: "Deactivated",
+      Deactivating: "Deactivating",
+      Deleting: "Deleting",
+      Failed: "Failed",
+      Inactive: "Inactive",
+      Pending: "Pending"
+    };
+    var CodeSigningPolicy = {
+      Enforce: "Enforce",
+      Warn: "Warn"
+    };
+    var OperationAction = {
+      CANCEL: "CANCEL",
+      FAIL: "FAIL",
+      RETRY: "RETRY",
+      START: "START",
+      SUCCEED: "SUCCEED"
+    };
+    var OperationType = {
+      CALLBACK: "CALLBACK",
+      CHAINED_INVOKE: "CHAINED_INVOKE",
+      CONTEXT: "CONTEXT",
+      EXECUTION: "EXECUTION",
+      STEP: "STEP",
+      WAIT: "WAIT"
+    };
+    var OperationStatus = {
+      CANCELLED: "CANCELLED",
+      FAILED: "FAILED",
+      PENDING: "PENDING",
+      READY: "READY",
+      STARTED: "STARTED",
+      STOPPED: "STOPPED",
+      SUCCEEDED: "SUCCEEDED",
+      TIMED_OUT: "TIMED_OUT"
+    };
+    var ExecutionStatus = {
+      FAILED: "FAILED",
+      RUNNING: "RUNNING",
+      STOPPED: "STOPPED",
+      SUCCEEDED: "SUCCEEDED",
+      TIMED_OUT: "TIMED_OUT"
+    };
+    var EventType = {
+      CallbackFailed: "CallbackFailed",
+      CallbackStarted: "CallbackStarted",
+      CallbackSucceeded: "CallbackSucceeded",
+      CallbackTimedOut: "CallbackTimedOut",
+      ChainedInvokeFailed: "ChainedInvokeFailed",
+      ChainedInvokeStarted: "ChainedInvokeStarted",
+      ChainedInvokeStopped: "ChainedInvokeStopped",
+      ChainedInvokeSucceeded: "ChainedInvokeSucceeded",
+      ChainedInvokeTimedOut: "ChainedInvokeTimedOut",
+      ContextFailed: "ContextFailed",
+      ContextStarted: "ContextStarted",
+      ContextSucceeded: "ContextSucceeded",
+      ExecutionFailed: "ExecutionFailed",
+      ExecutionStarted: "ExecutionStarted",
+      ExecutionStopped: "ExecutionStopped",
+      ExecutionSucceeded: "ExecutionSucceeded",
+      ExecutionTimedOut: "ExecutionTimedOut",
+      InvocationCompleted: "InvocationCompleted",
+      StepFailed: "StepFailed",
+      StepStarted: "StepStarted",
+      StepSucceeded: "StepSucceeded",
+      WaitCancelled: "WaitCancelled",
+      WaitStarted: "WaitStarted",
+      WaitSucceeded: "WaitSucceeded"
+    };
+    var FullDocument = {
+      Default: "Default",
+      UpdateLookup: "UpdateLookup"
+    };
+    var FunctionResponseType = {
+      ReportBatchItemFailures: "ReportBatchItemFailures"
+    };
+    var EventSourceMappingSystemLogLevel = {
+      Debug: "DEBUG",
+      Info: "INFO",
+      Warn: "WARN"
+    };
+    var EventSourceMappingMetric = {
+      ErrorCount: "ErrorCount",
+      EventCount: "EventCount",
+      KafkaMetrics: "KafkaMetrics"
+    };
+    var EndPointType = {
+      KAFKA_BOOTSTRAP_SERVERS: "KAFKA_BOOTSTRAP_SERVERS"
+    };
+    var SourceAccessType = {
+      BASIC_AUTH: "BASIC_AUTH",
+      CLIENT_CERTIFICATE_TLS_AUTH: "CLIENT_CERTIFICATE_TLS_AUTH",
+      SASL_SCRAM_256_AUTH: "SASL_SCRAM_256_AUTH",
+      SASL_SCRAM_512_AUTH: "SASL_SCRAM_512_AUTH",
+      SERVER_ROOT_CA_CERTIFICATE: "SERVER_ROOT_CA_CERTIFICATE",
+      VIRTUAL_HOST: "VIRTUAL_HOST",
+      VPC_SECURITY_GROUP: "VPC_SECURITY_GROUP",
+      VPC_SUBNET: "VPC_SUBNET"
+    };
+    var EventSourcePosition = {
+      AT_TIMESTAMP: "AT_TIMESTAMP",
+      LATEST: "LATEST",
+      TRIM_HORIZON: "TRIM_HORIZON"
+    };
+    var S3ObjectStorageMode = {
+      Copy: "COPY",
+      Reference: "REFERENCE"
+    };
+    var LogFormat = {
+      Json: "JSON",
+      Text: "Text"
+    };
+    var PackageType = {
+      Image: "Image",
+      Zip: "Zip"
+    };
+    var FunctionVersionLatestPublished = {
+      LATEST_PUBLISHED: "LATEST_PUBLISHED"
+    };
+    var Runtime = {
+      dotnet10: "dotnet10",
+      dotnet6: "dotnet6",
+      dotnet8: "dotnet8",
+      dotnetcore10: "dotnetcore1.0",
+      dotnetcore20: "dotnetcore2.0",
+      dotnetcore21: "dotnetcore2.1",
+      dotnetcore31: "dotnetcore3.1",
+      go1x: "go1.x",
+      java11: "java11",
+      java11al2023: "java11.al2023",
+      java17: "java17",
+      java17al2023: "java17.al2023",
+      java21: "java21",
+      java25: "java25",
+      java8: "java8",
+      java8al2: "java8.al2",
+      java8al2023: "java8.al2023",
+      nodejs: "nodejs",
+      nodejs10x: "nodejs10.x",
+      nodejs12x: "nodejs12.x",
+      nodejs14x: "nodejs14.x",
+      nodejs16x: "nodejs16.x",
+      nodejs18x: "nodejs18.x",
+      nodejs20x: "nodejs20.x",
+      nodejs22x: "nodejs22.x",
+      nodejs24x: "nodejs24.x",
+      nodejs26x: "nodejs26.x",
+      nodejs43: "nodejs4.3",
+      nodejs43edge: "nodejs4.3-edge",
+      nodejs610: "nodejs6.10",
+      nodejs810: "nodejs8.10",
+      provided: "provided",
+      providedal2: "provided.al2",
+      providedal2023: "provided.al2023",
+      python27: "python2.7",
+      python310: "python3.10",
+      python311: "python3.11",
+      python312: "python3.12",
+      python313: "python3.13",
+      python314: "python3.14",
+      python315: "python3.15",
+      python36: "python3.6",
+      python37: "python3.7",
+      python38: "python3.8",
+      python39: "python3.9",
+      ruby25: "ruby2.5",
+      ruby27: "ruby2.7",
+      ruby32: "ruby3.2",
+      ruby33: "ruby3.3",
+      ruby34: "ruby3.4",
+      ruby40: "ruby4.0"
+    };
+    var SnapStartApplyOn = {
+      None: "None",
+      PublishedVersions: "PublishedVersions"
+    };
+    var TenantIsolationMode = {
+      PER_TENANT: "PER_TENANT"
+    };
+    var TracingMode = {
+      Active: "Active",
+      PassThrough: "PassThrough"
+    };
+    var LastUpdateStatus = {
+      Failed: "Failed",
+      InProgress: "InProgress",
+      Successful: "Successful"
+    };
+    var LastUpdateStatusReasonCode = {
+      CapacityProviderScalingLimitExceeded: "CapacityProviderScalingLimitExceeded",
+      DependencyError: "DependencyError",
+      DisabledKMSKey: "DisabledKMSKey",
+      DisallowedByVpcEncryptionControl: "DisallowedByVpcEncryptionControl",
+      EC2RequestLimitExceeded: "EC2RequestLimitExceeded",
+      EFSIOError: "EFSIOError",
+      EFSMountConnectivityError: "EFSMountConnectivityError",
+      EFSMountFailure: "EFSMountFailure",
+      EFSMountTimeout: "EFSMountTimeout",
+      EniLimitExceeded: "EniLimitExceeded",
+      FunctionError: "FunctionError",
+      FunctionErrorExtensionInitError: "FunctionError.ExtensionInitError",
+      FunctionErrorInitResourceExhausted: "FunctionError.InitResourceExhausted",
+      FunctionErrorInitTimeout: "FunctionError.InitTimeout",
+      FunctionErrorInvalidEntryPoint: "FunctionError.InvalidEntryPoint",
+      FunctionErrorInvalidWorkingDirectory: "FunctionError.InvalidWorkingDirectory",
+      FunctionErrorPermissionDenied: "FunctionError.PermissionDenied",
+      FunctionErrorRuntimeInitError: "FunctionError.RuntimeInitError",
+      FunctionErrorTooManyExtensions: "FunctionError.TooManyExtensions",
+      ImageAccessDenied: "ImageAccessDenied",
+      ImageDeleted: "ImageDeleted",
+      InsufficientCapacity: "InsufficientCapacity",
+      InsufficientRolePermissions: "InsufficientRolePermissions",
+      InternalError: "InternalError",
+      InvalidConfiguration: "InvalidConfiguration",
+      InvalidImage: "InvalidImage",
+      InvalidRuntime: "InvalidRuntime",
+      InvalidSecurityGroup: "InvalidSecurityGroup",
+      InvalidStateKMSKey: "InvalidStateKMSKey",
+      InvalidSubnet: "InvalidSubnet",
+      InvalidZipFileException: "InvalidZipFileException",
+      KMSKeyAccessDenied: "KMSKeyAccessDenied",
+      KMSKeyNotFound: "KMSKeyNotFound",
+      ServiceQuotaExceededException: "ServiceQuotaExceededException",
+      SubnetOutOfIPAddresses: "SubnetOutOfIPAddresses",
+      VcpuLimitExceeded: "VcpuLimitExceeded"
+    };
+    var SnapStartOptimizationStatus = {
+      Off: "Off",
+      On: "On"
+    };
+    var StateReasonCode = {
+      CapacityProviderScalingLimitExceeded: "CapacityProviderScalingLimitExceeded",
+      Creating: "Creating",
+      DependencyError: "DependencyError",
+      DisabledKMSKey: "DisabledKMSKey",
+      DisallowedByVpcEncryptionControl: "DisallowedByVpcEncryptionControl",
+      DrainingDurableExecutions: "DrainingDurableExecutions",
+      EC2RequestLimitExceeded: "EC2RequestLimitExceeded",
+      EFSIOError: "EFSIOError",
+      EFSMountConnectivityError: "EFSMountConnectivityError",
+      EFSMountFailure: "EFSMountFailure",
+      EFSMountTimeout: "EFSMountTimeout",
+      EniLimitExceeded: "EniLimitExceeded",
+      FunctionError: "FunctionError",
+      FunctionErrorExtensionInitError: "FunctionError.ExtensionInitError",
+      FunctionErrorInitResourceExhausted: "FunctionError.InitResourceExhausted",
+      FunctionErrorInitTimeout: "FunctionError.InitTimeout",
+      FunctionErrorInvalidEntryPoint: "FunctionError.InvalidEntryPoint",
+      FunctionErrorInvalidWorkingDirectory: "FunctionError.InvalidWorkingDirectory",
+      FunctionErrorPermissionDenied: "FunctionError.PermissionDenied",
+      FunctionErrorRuntimeInitError: "FunctionError.RuntimeInitError",
+      FunctionErrorTooManyExtensions: "FunctionError.TooManyExtensions",
+      Idle: "Idle",
+      ImageAccessDenied: "ImageAccessDenied",
+      ImageDeleted: "ImageDeleted",
+      InsufficientCapacity: "InsufficientCapacity",
+      InsufficientRolePermissions: "InsufficientRolePermissions",
+      InternalError: "InternalError",
+      InvalidConfiguration: "InvalidConfiguration",
+      InvalidImage: "InvalidImage",
+      InvalidRuntime: "InvalidRuntime",
+      InvalidSecurityGroup: "InvalidSecurityGroup",
+      InvalidStateKMSKey: "InvalidStateKMSKey",
+      InvalidSubnet: "InvalidSubnet",
+      InvalidZipFileException: "InvalidZipFileException",
+      KMSKeyAccessDenied: "KMSKeyAccessDenied",
+      KMSKeyNotFound: "KMSKeyNotFound",
+      Restoring: "Restoring",
+      ServiceQuotaExceededException: "ServiceQuotaExceededException",
+      SubnetOutOfIPAddresses: "SubnetOutOfIPAddresses",
+      VcpuLimitExceeded: "VcpuLimitExceeded"
+    };
+    var InvokeMode = {
+      BUFFERED: "BUFFERED",
+      RESPONSE_STREAM: "RESPONSE_STREAM"
+    };
+    var RecursiveLoop = {
+      Allow: "Allow",
+      Terminate: "Terminate"
+    };
+    var UpdateRuntimeOn = {
+      Auto: "Auto",
+      FunctionUpdate: "FunctionUpdate",
+      Manual: "Manual"
+    };
+    var InvocationType = {
+      DryRun: "DryRun",
+      Event: "Event",
+      RequestResponse: "RequestResponse"
+    };
+    var LogType = {
+      None: "None",
+      Tail: "Tail"
+    };
+    var ResponseStreamingInvocationType = {
+      DryRun: "DryRun",
+      RequestResponse: "RequestResponse"
+    };
+    var FunctionVersion = {
+      ALL: "ALL"
+    };
+    var ProvisionedConcurrencyStatusEnum = {
+      FAILED: "FAILED",
+      IN_PROGRESS: "IN_PROGRESS",
+      READY: "READY"
+    };
+    exports2.AccountLimit$ = AccountLimit$;
+    exports2.AccountUsage$ = AccountUsage$;
+    exports2.AddLayerVersionPermission$ = AddLayerVersionPermission$;
+    exports2.AddLayerVersionPermissionCommand = AddLayerVersionPermissionCommand;
+    exports2.AddLayerVersionPermissionRequest$ = AddLayerVersionPermissionRequest$;
+    exports2.AddLayerVersionPermissionResponse$ = AddLayerVersionPermissionResponse$;
+    exports2.AddPermission$ = AddPermission$;
+    exports2.AddPermissionCommand = AddPermissionCommand;
+    exports2.AddPermissionRequest$ = AddPermissionRequest$;
+    exports2.AddPermissionResponse$ = AddPermissionResponse$;
+    exports2.AliasConfiguration$ = AliasConfiguration$;
+    exports2.AliasLimitExceededException = AliasLimitExceededException;
+    exports2.AliasLimitExceededException$ = AliasLimitExceededException$;
+    exports2.AliasRoutingConfiguration$ = AliasRoutingConfiguration$;
+    exports2.AllowedPublishers$ = AllowedPublishers$;
+    exports2.AmazonManagedKafkaEventSourceConfig$ = AmazonManagedKafkaEventSourceConfig$;
+    exports2.ApplicationLogLevel = ApplicationLogLevel;
+    exports2.Architecture = Architecture;
+    exports2.CallbackDetails$ = CallbackDetails$;
+    exports2.CallbackFailedDetails$ = CallbackFailedDetails$;
+    exports2.CallbackOptions$ = CallbackOptions$;
+    exports2.CallbackStartedDetails$ = CallbackStartedDetails$;
+    exports2.CallbackSucceededDetails$ = CallbackSucceededDetails$;
+    exports2.CallbackTimedOutDetails$ = CallbackTimedOutDetails$;
+    exports2.CallbackTimeoutException = CallbackTimeoutException;
+    exports2.CallbackTimeoutException$ = CallbackTimeoutException$;
+    exports2.CapacityProvider$ = CapacityProvider$;
+    exports2.CapacityProviderConfig$ = CapacityProviderConfig$;
+    exports2.CapacityProviderLimitExceededException = CapacityProviderLimitExceededException;
+    exports2.CapacityProviderLimitExceededException$ = CapacityProviderLimitExceededException$;
+    exports2.CapacityProviderLoggingConfig$ = CapacityProviderLoggingConfig$;
+    exports2.CapacityProviderPermissionsConfig$ = CapacityProviderPermissionsConfig$;
+    exports2.CapacityProviderPredefinedMetricType = CapacityProviderPredefinedMetricType;
+    exports2.CapacityProviderScalingConfig$ = CapacityProviderScalingConfig$;
+    exports2.CapacityProviderScalingMode = CapacityProviderScalingMode;
+    exports2.CapacityProviderState = CapacityProviderState;
+    exports2.CapacityProviderTelemetryConfig$ = CapacityProviderTelemetryConfig$;
+    exports2.CapacityProviderVpcConfig$ = CapacityProviderVpcConfig$;
+    exports2.ChainedInvokeDetails$ = ChainedInvokeDetails$;
+    exports2.ChainedInvokeFailedDetails$ = ChainedInvokeFailedDetails$;
+    exports2.ChainedInvokeOptions$ = ChainedInvokeOptions$;
+    exports2.ChainedInvokeStartedDetails$ = ChainedInvokeStartedDetails$;
+    exports2.ChainedInvokeStoppedDetails$ = ChainedInvokeStoppedDetails$;
+    exports2.ChainedInvokeSucceededDetails$ = ChainedInvokeSucceededDetails$;
+    exports2.ChainedInvokeTimedOutDetails$ = ChainedInvokeTimedOutDetails$;
+    exports2.CheckpointDurableExecution$ = CheckpointDurableExecution$;
+    exports2.CheckpointDurableExecutionCommand = CheckpointDurableExecutionCommand;
+    exports2.CheckpointDurableExecutionRequest$ = CheckpointDurableExecutionRequest$;
+    exports2.CheckpointDurableExecutionResponse$ = CheckpointDurableExecutionResponse$;
+    exports2.CheckpointUpdatedExecutionState$ = CheckpointUpdatedExecutionState$;
+    exports2.CodeArtifactUserDeletedException = CodeArtifactUserDeletedException;
+    exports2.CodeArtifactUserDeletedException$ = CodeArtifactUserDeletedException$;
+    exports2.CodeArtifactUserFailedException = CodeArtifactUserFailedException;
+    exports2.CodeArtifactUserFailedException$ = CodeArtifactUserFailedException$;
+    exports2.CodeArtifactUserPendingException = CodeArtifactUserPendingException;
+    exports2.CodeArtifactUserPendingException$ = CodeArtifactUserPendingException$;
+    exports2.CodeSigningConfig$ = CodeSigningConfig$;
+    exports2.CodeSigningConfigNotFoundException = CodeSigningConfigNotFoundException;
+    exports2.CodeSigningConfigNotFoundException$ = CodeSigningConfigNotFoundException$;
+    exports2.CodeSigningPolicies$ = CodeSigningPolicies$;
+    exports2.CodeSigningPolicy = CodeSigningPolicy;
+    exports2.CodeStorageExceededException = CodeStorageExceededException;
+    exports2.CodeStorageExceededException$ = CodeStorageExceededException$;
+    exports2.CodeVerificationFailedException = CodeVerificationFailedException;
+    exports2.CodeVerificationFailedException$ = CodeVerificationFailedException$;
+    exports2.Concurrency$ = Concurrency$;
+    exports2.ContextDetails$ = ContextDetails$;
+    exports2.ContextFailedDetails$ = ContextFailedDetails$;
+    exports2.ContextOptions$ = ContextOptions$;
+    exports2.ContextStartedDetails$ = ContextStartedDetails$;
+    exports2.ContextSucceededDetails$ = ContextSucceededDetails$;
+    exports2.Cors$ = Cors$;
+    exports2.CreateAlias$ = CreateAlias$;
+    exports2.CreateAliasCommand = CreateAliasCommand;
+    exports2.CreateAliasRequest$ = CreateAliasRequest$;
+    exports2.CreateCapacityProvider$ = CreateCapacityProvider$;
+    exports2.CreateCapacityProviderCommand = CreateCapacityProviderCommand;
+    exports2.CreateCapacityProviderRequest$ = CreateCapacityProviderRequest$;
+    exports2.CreateCapacityProviderResponse$ = CreateCapacityProviderResponse$;
+    exports2.CreateCodeSigningConfig$ = CreateCodeSigningConfig$;
+    exports2.CreateCodeSigningConfigCommand = CreateCodeSigningConfigCommand;
+    exports2.CreateCodeSigningConfigRequest$ = CreateCodeSigningConfigRequest$;
+    exports2.CreateCodeSigningConfigResponse$ = CreateCodeSigningConfigResponse$;
+    exports2.CreateEventSourceMapping$ = CreateEventSourceMapping$;
+    exports2.CreateEventSourceMappingCommand = CreateEventSourceMappingCommand;
+    exports2.CreateEventSourceMappingRequest$ = CreateEventSourceMappingRequest$;
+    exports2.CreateFunction$ = CreateFunction$;
+    exports2.CreateFunctionCommand = CreateFunctionCommand;
+    exports2.CreateFunctionRequest$ = CreateFunctionRequest$;
+    exports2.CreateFunctionUrlConfig$ = CreateFunctionUrlConfig$;
+    exports2.CreateFunctionUrlConfigCommand = CreateFunctionUrlConfigCommand;
+    exports2.CreateFunctionUrlConfigRequest$ = CreateFunctionUrlConfigRequest$;
+    exports2.CreateFunctionUrlConfigResponse$ = CreateFunctionUrlConfigResponse$;
+    exports2.DeadLetterConfig$ = DeadLetterConfig$;
+    exports2.DeleteAlias$ = DeleteAlias$;
+    exports2.DeleteAliasCommand = DeleteAliasCommand;
+    exports2.DeleteAliasRequest$ = DeleteAliasRequest$;
+    exports2.DeleteCapacityProvider$ = DeleteCapacityProvider$;
+    exports2.DeleteCapacityProviderCommand = DeleteCapacityProviderCommand;
+    exports2.DeleteCapacityProviderRequest$ = DeleteCapacityProviderRequest$;
+    exports2.DeleteCapacityProviderResponse$ = DeleteCapacityProviderResponse$;
+    exports2.DeleteCodeSigningConfig$ = DeleteCodeSigningConfig$;
+    exports2.DeleteCodeSigningConfigCommand = DeleteCodeSigningConfigCommand;
+    exports2.DeleteCodeSigningConfigRequest$ = DeleteCodeSigningConfigRequest$;
+    exports2.DeleteCodeSigningConfigResponse$ = DeleteCodeSigningConfigResponse$;
+    exports2.DeleteEventSourceMapping$ = DeleteEventSourceMapping$;
+    exports2.DeleteEventSourceMappingCommand = DeleteEventSourceMappingCommand;
+    exports2.DeleteEventSourceMappingRequest$ = DeleteEventSourceMappingRequest$;
+    exports2.DeleteFunction$ = DeleteFunction$;
+    exports2.DeleteFunctionCodeSigningConfig$ = DeleteFunctionCodeSigningConfig$;
+    exports2.DeleteFunctionCodeSigningConfigCommand = DeleteFunctionCodeSigningConfigCommand;
+    exports2.DeleteFunctionCodeSigningConfigRequest$ = DeleteFunctionCodeSigningConfigRequest$;
+    exports2.DeleteFunctionCommand = DeleteFunctionCommand;
+    exports2.DeleteFunctionConcurrency$ = DeleteFunctionConcurrency$;
+    exports2.DeleteFunctionConcurrencyCommand = DeleteFunctionConcurrencyCommand;
+    exports2.DeleteFunctionConcurrencyRequest$ = DeleteFunctionConcurrencyRequest$;
+    exports2.DeleteFunctionEventInvokeConfig$ = DeleteFunctionEventInvokeConfig$;
+    exports2.DeleteFunctionEventInvokeConfigCommand = DeleteFunctionEventInvokeConfigCommand;
+    exports2.DeleteFunctionEventInvokeConfigRequest$ = DeleteFunctionEventInvokeConfigRequest$;
+    exports2.DeleteFunctionRequest$ = DeleteFunctionRequest$;
+    exports2.DeleteFunctionResponse$ = DeleteFunctionResponse$;
+    exports2.DeleteFunctionUrlConfig$ = DeleteFunctionUrlConfig$;
+    exports2.DeleteFunctionUrlConfigCommand = DeleteFunctionUrlConfigCommand;
+    exports2.DeleteFunctionUrlConfigRequest$ = DeleteFunctionUrlConfigRequest$;
+    exports2.DeleteLayerVersion$ = DeleteLayerVersion$;
+    exports2.DeleteLayerVersionCommand = DeleteLayerVersionCommand;
+    exports2.DeleteLayerVersionRequest$ = DeleteLayerVersionRequest$;
+    exports2.DeleteProvisionedConcurrencyConfig$ = DeleteProvisionedConcurrencyConfig$;
+    exports2.DeleteProvisionedConcurrencyConfigCommand = DeleteProvisionedConcurrencyConfigCommand;
+    exports2.DeleteProvisionedConcurrencyConfigRequest$ = DeleteProvisionedConcurrencyConfigRequest$;
+    exports2.DestinationConfig$ = DestinationConfig$;
+    exports2.DocumentDBEventSourceConfig$ = DocumentDBEventSourceConfig$;
+    exports2.DurableConfig$ = DurableConfig$;
+    exports2.DurableExecutionAlreadyStartedException = DurableExecutionAlreadyStartedException;
+    exports2.DurableExecutionAlreadyStartedException$ = DurableExecutionAlreadyStartedException$;
+    exports2.EC2AccessDeniedException = EC2AccessDeniedException;
+    exports2.EC2AccessDeniedException$ = EC2AccessDeniedException$;
+    exports2.EC2ThrottledException = EC2ThrottledException;
+    exports2.EC2ThrottledException$ = EC2ThrottledException$;
+    exports2.EC2UnexpectedException = EC2UnexpectedException;
+    exports2.EC2UnexpectedException$ = EC2UnexpectedException$;
+    exports2.EFSIOException = EFSIOException;
+    exports2.EFSIOException$ = EFSIOException$;
+    exports2.EFSMountConnectivityException = EFSMountConnectivityException;
+    exports2.EFSMountConnectivityException$ = EFSMountConnectivityException$;
+    exports2.EFSMountFailureException = EFSMountFailureException;
+    exports2.EFSMountFailureException$ = EFSMountFailureException$;
+    exports2.EFSMountTimeoutException = EFSMountTimeoutException;
+    exports2.EFSMountTimeoutException$ = EFSMountTimeoutException$;
+    exports2.ENILimitReachedException = ENILimitReachedException;
+    exports2.ENILimitReachedException$ = ENILimitReachedException$;
+    exports2.ENINotReadyException = ENINotReadyException;
+    exports2.ENINotReadyException$ = ENINotReadyException$;
+    exports2.EndPointType = EndPointType;
+    exports2.Environment$ = Environment$;
+    exports2.EnvironmentError$ = EnvironmentError$;
+    exports2.EnvironmentResponse$ = EnvironmentResponse$;
+    exports2.EphemeralStorage$ = EphemeralStorage$;
+    exports2.ErrorObject$ = ErrorObject$;
+    exports2.Event$ = Event$;
+    exports2.EventError$ = EventError$;
+    exports2.EventInput$ = EventInput$;
+    exports2.EventResult$ = EventResult$;
+    exports2.EventSourceMappingConfiguration$ = EventSourceMappingConfiguration$;
+    exports2.EventSourceMappingLoggingConfig$ = EventSourceMappingLoggingConfig$;
+    exports2.EventSourceMappingMetric = EventSourceMappingMetric;
+    exports2.EventSourceMappingMetricsConfig$ = EventSourceMappingMetricsConfig$;
+    exports2.EventSourceMappingSystemLogLevel = EventSourceMappingSystemLogLevel;
+    exports2.EventSourcePosition = EventSourcePosition;
+    exports2.EventType = EventType;
+    exports2.Execution$ = Execution$;
+    exports2.ExecutionDetails$ = ExecutionDetails$;
+    exports2.ExecutionFailedDetails$ = ExecutionFailedDetails$;
+    exports2.ExecutionStartedDetails$ = ExecutionStartedDetails$;
+    exports2.ExecutionStatus = ExecutionStatus;
+    exports2.ExecutionStoppedDetails$ = ExecutionStoppedDetails$;
+    exports2.ExecutionSucceededDetails$ = ExecutionSucceededDetails$;
+    exports2.ExecutionTimedOutDetails$ = ExecutionTimedOutDetails$;
+    exports2.FileSystemConfig$ = FileSystemConfig$;
+    exports2.Filter$ = Filter$;
+    exports2.FilterCriteria$ = FilterCriteria$;
+    exports2.FilterCriteriaError$ = FilterCriteriaError$;
+    exports2.FullDocument = FullDocument;
+    exports2.FunctionCode$ = FunctionCode$;
+    exports2.FunctionCodeLocation$ = FunctionCodeLocation$;
+    exports2.FunctionCodeLocationError$ = FunctionCodeLocationError$;
+    exports2.FunctionConfiguration$ = FunctionConfiguration$;
+    exports2.FunctionEventInvokeConfig$ = FunctionEventInvokeConfig$;
+    exports2.FunctionResponseType = FunctionResponseType;
+    exports2.FunctionScalingConfig$ = FunctionScalingConfig$;
+    exports2.FunctionUrlAuthType = FunctionUrlAuthType;
+    exports2.FunctionUrlConfig$ = FunctionUrlConfig$;
+    exports2.FunctionVersion = FunctionVersion;
+    exports2.FunctionVersionLatestPublished = FunctionVersionLatestPublished;
+    exports2.FunctionVersionsByCapacityProviderListItem$ = FunctionVersionsByCapacityProviderListItem$;
+    exports2.FunctionVersionsPerCapacityProviderLimitExceededException = FunctionVersionsPerCapacityProviderLimitExceededException;
+    exports2.FunctionVersionsPerCapacityProviderLimitExceededException$ = FunctionVersionsPerCapacityProviderLimitExceededException$;
+    exports2.GetAccountSettings$ = GetAccountSettings$;
+    exports2.GetAccountSettingsCommand = GetAccountSettingsCommand;
+    exports2.GetAccountSettingsRequest$ = GetAccountSettingsRequest$;
+    exports2.GetAccountSettingsResponse$ = GetAccountSettingsResponse$;
+    exports2.GetAlias$ = GetAlias$;
+    exports2.GetAliasCommand = GetAliasCommand;
+    exports2.GetAliasRequest$ = GetAliasRequest$;
+    exports2.GetCapacityProvider$ = GetCapacityProvider$;
+    exports2.GetCapacityProviderCommand = GetCapacityProviderCommand;
+    exports2.GetCapacityProviderRequest$ = GetCapacityProviderRequest$;
+    exports2.GetCapacityProviderResponse$ = GetCapacityProviderResponse$;
+    exports2.GetCodeSigningConfig$ = GetCodeSigningConfig$;
+    exports2.GetCodeSigningConfigCommand = GetCodeSigningConfigCommand;
+    exports2.GetCodeSigningConfigRequest$ = GetCodeSigningConfigRequest$;
+    exports2.GetCodeSigningConfigResponse$ = GetCodeSigningConfigResponse$;
+    exports2.GetDurableExecution$ = GetDurableExecution$;
+    exports2.GetDurableExecutionCommand = GetDurableExecutionCommand;
+    exports2.GetDurableExecutionHistory$ = GetDurableExecutionHistory$;
+    exports2.GetDurableExecutionHistoryCommand = GetDurableExecutionHistoryCommand;
+    exports2.GetDurableExecutionHistoryRequest$ = GetDurableExecutionHistoryRequest$;
+    exports2.GetDurableExecutionHistoryResponse$ = GetDurableExecutionHistoryResponse$;
+    exports2.GetDurableExecutionRequest$ = GetDurableExecutionRequest$;
+    exports2.GetDurableExecutionResponse$ = GetDurableExecutionResponse$;
+    exports2.GetDurableExecutionState$ = GetDurableExecutionState$;
+    exports2.GetDurableExecutionStateCommand = GetDurableExecutionStateCommand;
+    exports2.GetDurableExecutionStateRequest$ = GetDurableExecutionStateRequest$;
+    exports2.GetDurableExecutionStateResponse$ = GetDurableExecutionStateResponse$;
+    exports2.GetEventSourceMapping$ = GetEventSourceMapping$;
+    exports2.GetEventSourceMappingCommand = GetEventSourceMappingCommand;
+    exports2.GetEventSourceMappingRequest$ = GetEventSourceMappingRequest$;
+    exports2.GetFunction$ = GetFunction$;
+    exports2.GetFunctionCodeSigningConfig$ = GetFunctionCodeSigningConfig$;
+    exports2.GetFunctionCodeSigningConfigCommand = GetFunctionCodeSigningConfigCommand;
+    exports2.GetFunctionCodeSigningConfigRequest$ = GetFunctionCodeSigningConfigRequest$;
+    exports2.GetFunctionCodeSigningConfigResponse$ = GetFunctionCodeSigningConfigResponse$;
+    exports2.GetFunctionCommand = GetFunctionCommand;
+    exports2.GetFunctionConcurrency$ = GetFunctionConcurrency$;
+    exports2.GetFunctionConcurrencyCommand = GetFunctionConcurrencyCommand;
+    exports2.GetFunctionConcurrencyRequest$ = GetFunctionConcurrencyRequest$;
+    exports2.GetFunctionConcurrencyResponse$ = GetFunctionConcurrencyResponse$;
+    exports2.GetFunctionConfiguration$ = GetFunctionConfiguration$;
+    exports2.GetFunctionConfigurationCommand = GetFunctionConfigurationCommand;
+    exports2.GetFunctionConfigurationRequest$ = GetFunctionConfigurationRequest$;
+    exports2.GetFunctionEventInvokeConfig$ = GetFunctionEventInvokeConfig$;
+    exports2.GetFunctionEventInvokeConfigCommand = GetFunctionEventInvokeConfigCommand;
+    exports2.GetFunctionEventInvokeConfigRequest$ = GetFunctionEventInvokeConfigRequest$;
+    exports2.GetFunctionRecursionConfig$ = GetFunctionRecursionConfig$;
+    exports2.GetFunctionRecursionConfigCommand = GetFunctionRecursionConfigCommand;
+    exports2.GetFunctionRecursionConfigRequest$ = GetFunctionRecursionConfigRequest$;
+    exports2.GetFunctionRecursionConfigResponse$ = GetFunctionRecursionConfigResponse$;
+    exports2.GetFunctionRequest$ = GetFunctionRequest$;
+    exports2.GetFunctionResponse$ = GetFunctionResponse$;
+    exports2.GetFunctionScalingConfig$ = GetFunctionScalingConfig$;
+    exports2.GetFunctionScalingConfigCommand = GetFunctionScalingConfigCommand;
+    exports2.GetFunctionScalingConfigRequest$ = GetFunctionScalingConfigRequest$;
+    exports2.GetFunctionScalingConfigResponse$ = GetFunctionScalingConfigResponse$;
+    exports2.GetFunctionUrlConfig$ = GetFunctionUrlConfig$;
+    exports2.GetFunctionUrlConfigCommand = GetFunctionUrlConfigCommand;
+    exports2.GetFunctionUrlConfigRequest$ = GetFunctionUrlConfigRequest$;
+    exports2.GetFunctionUrlConfigResponse$ = GetFunctionUrlConfigResponse$;
+    exports2.GetLayerVersion$ = GetLayerVersion$;
+    exports2.GetLayerVersionByArn$ = GetLayerVersionByArn$;
+    exports2.GetLayerVersionByArnCommand = GetLayerVersionByArnCommand;
+    exports2.GetLayerVersionByArnRequest$ = GetLayerVersionByArnRequest$;
+    exports2.GetLayerVersionCommand = GetLayerVersionCommand;
+    exports2.GetLayerVersionPolicy$ = GetLayerVersionPolicy$;
+    exports2.GetLayerVersionPolicyCommand = GetLayerVersionPolicyCommand;
+    exports2.GetLayerVersionPolicyRequest$ = GetLayerVersionPolicyRequest$;
+    exports2.GetLayerVersionPolicyResponse$ = GetLayerVersionPolicyResponse$;
+    exports2.GetLayerVersionRequest$ = GetLayerVersionRequest$;
+    exports2.GetLayerVersionResponse$ = GetLayerVersionResponse$;
+    exports2.GetPolicy$ = GetPolicy$;
+    exports2.GetPolicyCommand = GetPolicyCommand;
+    exports2.GetPolicyRequest$ = GetPolicyRequest$;
+    exports2.GetPolicyResponse$ = GetPolicyResponse$;
+    exports2.GetProvisionedConcurrencyConfig$ = GetProvisionedConcurrencyConfig$;
+    exports2.GetProvisionedConcurrencyConfigCommand = GetProvisionedConcurrencyConfigCommand;
+    exports2.GetProvisionedConcurrencyConfigRequest$ = GetProvisionedConcurrencyConfigRequest$;
+    exports2.GetProvisionedConcurrencyConfigResponse$ = GetProvisionedConcurrencyConfigResponse$;
+    exports2.GetRuntimeManagementConfig$ = GetRuntimeManagementConfig$;
+    exports2.GetRuntimeManagementConfigCommand = GetRuntimeManagementConfigCommand;
+    exports2.GetRuntimeManagementConfigRequest$ = GetRuntimeManagementConfigRequest$;
+    exports2.GetRuntimeManagementConfigResponse$ = GetRuntimeManagementConfigResponse$;
+    exports2.ImageConfig$ = ImageConfig$;
+    exports2.ImageConfigError$ = ImageConfigError$;
+    exports2.ImageConfigResponse$ = ImageConfigResponse$;
+    exports2.InstanceRequirements$ = InstanceRequirements$;
+    exports2.InvalidCodeSignatureException = InvalidCodeSignatureException;
+    exports2.InvalidCodeSignatureException$ = InvalidCodeSignatureException$;
+    exports2.InvalidParameterValueException = InvalidParameterValueException;
+    exports2.InvalidParameterValueException$ = InvalidParameterValueException$;
+    exports2.InvalidRequestContentException = InvalidRequestContentException;
+    exports2.InvalidRequestContentException$ = InvalidRequestContentException$;
+    exports2.InvalidRuntimeException = InvalidRuntimeException;
+    exports2.InvalidRuntimeException$ = InvalidRuntimeException$;
+    exports2.InvalidSecurityGroupIDException = InvalidSecurityGroupIDException;
+    exports2.InvalidSecurityGroupIDException$ = InvalidSecurityGroupIDException$;
+    exports2.InvalidSubnetIDException = InvalidSubnetIDException;
+    exports2.InvalidSubnetIDException$ = InvalidSubnetIDException$;
+    exports2.InvalidZipFileException = InvalidZipFileException;
+    exports2.InvalidZipFileException$ = InvalidZipFileException$;
+    exports2.InvocationCompletedDetails$ = InvocationCompletedDetails$;
+    exports2.InvocationRequest$ = InvocationRequest$;
+    exports2.InvocationResponse$ = InvocationResponse$;
+    exports2.InvocationType = InvocationType;
+    exports2.Invoke$ = Invoke$;
+    exports2.InvokeAsync$ = InvokeAsync$;
+    exports2.InvokeAsyncCommand = InvokeAsyncCommand;
+    exports2.InvokeAsyncRequest$ = InvokeAsyncRequest$;
+    exports2.InvokeAsyncResponse$ = InvokeAsyncResponse$;
+    exports2.InvokeCommand = InvokeCommand2;
+    exports2.InvokeMode = InvokeMode;
+    exports2.InvokeResponseStreamUpdate$ = InvokeResponseStreamUpdate$;
+    exports2.InvokeWithResponseStream$ = InvokeWithResponseStream$;
+    exports2.InvokeWithResponseStreamCommand = InvokeWithResponseStreamCommand;
+    exports2.InvokeWithResponseStreamCompleteEvent$ = InvokeWithResponseStreamCompleteEvent$;
+    exports2.InvokeWithResponseStreamRequest$ = InvokeWithResponseStreamRequest$;
+    exports2.InvokeWithResponseStreamResponse$ = InvokeWithResponseStreamResponse$;
+    exports2.InvokeWithResponseStreamResponseEvent$ = InvokeWithResponseStreamResponseEvent$;
+    exports2.KMSAccessDeniedException = KMSAccessDeniedException;
+    exports2.KMSAccessDeniedException$ = KMSAccessDeniedException$;
+    exports2.KMSDisabledException = KMSDisabledException;
+    exports2.KMSDisabledException$ = KMSDisabledException$;
+    exports2.KMSInvalidStateException = KMSInvalidStateException;
+    exports2.KMSInvalidStateException$ = KMSInvalidStateException$;
+    exports2.KMSNotFoundException = KMSNotFoundException;
+    exports2.KMSNotFoundException$ = KMSNotFoundException$;
+    exports2.KafkaSchemaRegistryAccessConfig$ = KafkaSchemaRegistryAccessConfig$;
+    exports2.KafkaSchemaRegistryAuthType = KafkaSchemaRegistryAuthType;
+    exports2.KafkaSchemaRegistryConfig$ = KafkaSchemaRegistryConfig$;
+    exports2.KafkaSchemaValidationAttribute = KafkaSchemaValidationAttribute;
+    exports2.KafkaSchemaValidationConfig$ = KafkaSchemaValidationConfig$;
+    exports2.Lambda = Lambda;
+    exports2.LambdaClient = LambdaClient2;
+    exports2.LambdaManagedInstancesCapacityProviderConfig$ = LambdaManagedInstancesCapacityProviderConfig$;
+    exports2.LambdaServiceException = LambdaServiceException;
+    exports2.LambdaServiceException$ = LambdaServiceException$;
+    exports2.LastUpdateStatus = LastUpdateStatus;
+    exports2.LastUpdateStatusReasonCode = LastUpdateStatusReasonCode;
+    exports2.Layer$ = Layer$;
+    exports2.LayerVersionContentInput$ = LayerVersionContentInput$;
+    exports2.LayerVersionContentOutput$ = LayerVersionContentOutput$;
+    exports2.LayerVersionsListItem$ = LayerVersionsListItem$;
+    exports2.LayersListItem$ = LayersListItem$;
+    exports2.ListAliases$ = ListAliases$;
+    exports2.ListAliasesCommand = ListAliasesCommand;
+    exports2.ListAliasesRequest$ = ListAliasesRequest$;
+    exports2.ListAliasesResponse$ = ListAliasesResponse$;
+    exports2.ListCapacityProviders$ = ListCapacityProviders$;
+    exports2.ListCapacityProvidersCommand = ListCapacityProvidersCommand;
+    exports2.ListCapacityProvidersRequest$ = ListCapacityProvidersRequest$;
+    exports2.ListCapacityProvidersResponse$ = ListCapacityProvidersResponse$;
+    exports2.ListCodeSigningConfigs$ = ListCodeSigningConfigs$;
+    exports2.ListCodeSigningConfigsCommand = ListCodeSigningConfigsCommand;
+    exports2.ListCodeSigningConfigsRequest$ = ListCodeSigningConfigsRequest$;
+    exports2.ListCodeSigningConfigsResponse$ = ListCodeSigningConfigsResponse$;
+    exports2.ListDurableExecutionsByFunction$ = ListDurableExecutionsByFunction$;
+    exports2.ListDurableExecutionsByFunctionCommand = ListDurableExecutionsByFunctionCommand;
+    exports2.ListDurableExecutionsByFunctionRequest$ = ListDurableExecutionsByFunctionRequest$;
+    exports2.ListDurableExecutionsByFunctionResponse$ = ListDurableExecutionsByFunctionResponse$;
+    exports2.ListEventSourceMappings$ = ListEventSourceMappings$;
+    exports2.ListEventSourceMappingsCommand = ListEventSourceMappingsCommand;
+    exports2.ListEventSourceMappingsRequest$ = ListEventSourceMappingsRequest$;
+    exports2.ListEventSourceMappingsResponse$ = ListEventSourceMappingsResponse$;
+    exports2.ListFunctionEventInvokeConfigs$ = ListFunctionEventInvokeConfigs$;
+    exports2.ListFunctionEventInvokeConfigsCommand = ListFunctionEventInvokeConfigsCommand;
+    exports2.ListFunctionEventInvokeConfigsRequest$ = ListFunctionEventInvokeConfigsRequest$;
+    exports2.ListFunctionEventInvokeConfigsResponse$ = ListFunctionEventInvokeConfigsResponse$;
+    exports2.ListFunctionUrlConfigs$ = ListFunctionUrlConfigs$;
+    exports2.ListFunctionUrlConfigsCommand = ListFunctionUrlConfigsCommand;
+    exports2.ListFunctionUrlConfigsRequest$ = ListFunctionUrlConfigsRequest$;
+    exports2.ListFunctionUrlConfigsResponse$ = ListFunctionUrlConfigsResponse$;
+    exports2.ListFunctionVersionsByCapacityProvider$ = ListFunctionVersionsByCapacityProvider$;
+    exports2.ListFunctionVersionsByCapacityProviderCommand = ListFunctionVersionsByCapacityProviderCommand;
+    exports2.ListFunctionVersionsByCapacityProviderRequest$ = ListFunctionVersionsByCapacityProviderRequest$;
+    exports2.ListFunctionVersionsByCapacityProviderResponse$ = ListFunctionVersionsByCapacityProviderResponse$;
+    exports2.ListFunctions$ = ListFunctions$;
+    exports2.ListFunctionsByCodeSigningConfig$ = ListFunctionsByCodeSigningConfig$;
+    exports2.ListFunctionsByCodeSigningConfigCommand = ListFunctionsByCodeSigningConfigCommand;
+    exports2.ListFunctionsByCodeSigningConfigRequest$ = ListFunctionsByCodeSigningConfigRequest$;
+    exports2.ListFunctionsByCodeSigningConfigResponse$ = ListFunctionsByCodeSigningConfigResponse$;
+    exports2.ListFunctionsCommand = ListFunctionsCommand;
+    exports2.ListFunctionsRequest$ = ListFunctionsRequest$;
+    exports2.ListFunctionsResponse$ = ListFunctionsResponse$;
+    exports2.ListLayerVersions$ = ListLayerVersions$;
+    exports2.ListLayerVersionsCommand = ListLayerVersionsCommand;
+    exports2.ListLayerVersionsRequest$ = ListLayerVersionsRequest$;
+    exports2.ListLayerVersionsResponse$ = ListLayerVersionsResponse$;
+    exports2.ListLayers$ = ListLayers$;
+    exports2.ListLayersCommand = ListLayersCommand;
+    exports2.ListLayersRequest$ = ListLayersRequest$;
+    exports2.ListLayersResponse$ = ListLayersResponse$;
+    exports2.ListProvisionedConcurrencyConfigs$ = ListProvisionedConcurrencyConfigs$;
+    exports2.ListProvisionedConcurrencyConfigsCommand = ListProvisionedConcurrencyConfigsCommand;
+    exports2.ListProvisionedConcurrencyConfigsRequest$ = ListProvisionedConcurrencyConfigsRequest$;
+    exports2.ListProvisionedConcurrencyConfigsResponse$ = ListProvisionedConcurrencyConfigsResponse$;
+    exports2.ListTags$ = ListTags$;
+    exports2.ListTagsCommand = ListTagsCommand;
+    exports2.ListTagsRequest$ = ListTagsRequest$;
+    exports2.ListTagsResponse$ = ListTagsResponse$;
+    exports2.ListVersionsByFunction$ = ListVersionsByFunction$;
+    exports2.ListVersionsByFunctionCommand = ListVersionsByFunctionCommand;
+    exports2.ListVersionsByFunctionRequest$ = ListVersionsByFunctionRequest$;
+    exports2.ListVersionsByFunctionResponse$ = ListVersionsByFunctionResponse$;
+    exports2.LogFormat = LogFormat;
+    exports2.LogType = LogType;
+    exports2.LoggingConfig$ = LoggingConfig$;
+    exports2.ModeNotSupportedException = ModeNotSupportedException;
+    exports2.ModeNotSupportedException$ = ModeNotSupportedException$;
+    exports2.NoPublishedVersionException = NoPublishedVersionException;
+    exports2.NoPublishedVersionException$ = NoPublishedVersionException$;
+    exports2.OnFailure$ = OnFailure$;
+    exports2.OnSuccess$ = OnSuccess$;
+    exports2.Operation$ = Operation$;
+    exports2.OperationAction = OperationAction;
+    exports2.OperationStatus = OperationStatus;
+    exports2.OperationType = OperationType;
+    exports2.OperationUpdate$ = OperationUpdate$;
+    exports2.PackageType = PackageType;
+    exports2.PolicyLengthExceededException = PolicyLengthExceededException;
+    exports2.PolicyLengthExceededException$ = PolicyLengthExceededException$;
+    exports2.PreconditionFailedException = PreconditionFailedException;
+    exports2.PreconditionFailedException$ = PreconditionFailedException$;
+    exports2.PropagateTags$ = PropagateTags$;
+    exports2.PropagateTagsMode = PropagateTagsMode;
+    exports2.ProvisionedConcurrencyConfigListItem$ = ProvisionedConcurrencyConfigListItem$;
+    exports2.ProvisionedConcurrencyConfigNotFoundException = ProvisionedConcurrencyConfigNotFoundException;
+    exports2.ProvisionedConcurrencyConfigNotFoundException$ = ProvisionedConcurrencyConfigNotFoundException$;
+    exports2.ProvisionedConcurrencyStatusEnum = ProvisionedConcurrencyStatusEnum;
+    exports2.ProvisionedPollerConfig$ = ProvisionedPollerConfig$;
+    exports2.PublicPolicyException = PublicPolicyException;
+    exports2.PublicPolicyException$ = PublicPolicyException$;
+    exports2.PublishLayerVersion$ = PublishLayerVersion$;
+    exports2.PublishLayerVersionCommand = PublishLayerVersionCommand;
+    exports2.PublishLayerVersionRequest$ = PublishLayerVersionRequest$;
+    exports2.PublishLayerVersionResponse$ = PublishLayerVersionResponse$;
+    exports2.PublishVersion$ = PublishVersion$;
+    exports2.PublishVersionCommand = PublishVersionCommand;
+    exports2.PublishVersionRequest$ = PublishVersionRequest$;
+    exports2.PutFunctionCodeSigningConfig$ = PutFunctionCodeSigningConfig$;
+    exports2.PutFunctionCodeSigningConfigCommand = PutFunctionCodeSigningConfigCommand;
+    exports2.PutFunctionCodeSigningConfigRequest$ = PutFunctionCodeSigningConfigRequest$;
+    exports2.PutFunctionCodeSigningConfigResponse$ = PutFunctionCodeSigningConfigResponse$;
+    exports2.PutFunctionConcurrency$ = PutFunctionConcurrency$;
+    exports2.PutFunctionConcurrencyCommand = PutFunctionConcurrencyCommand;
+    exports2.PutFunctionConcurrencyRequest$ = PutFunctionConcurrencyRequest$;
+    exports2.PutFunctionEventInvokeConfig$ = PutFunctionEventInvokeConfig$;
+    exports2.PutFunctionEventInvokeConfigCommand = PutFunctionEventInvokeConfigCommand;
+    exports2.PutFunctionEventInvokeConfigRequest$ = PutFunctionEventInvokeConfigRequest$;
+    exports2.PutFunctionRecursionConfig$ = PutFunctionRecursionConfig$;
+    exports2.PutFunctionRecursionConfigCommand = PutFunctionRecursionConfigCommand;
+    exports2.PutFunctionRecursionConfigRequest$ = PutFunctionRecursionConfigRequest$;
+    exports2.PutFunctionRecursionConfigResponse$ = PutFunctionRecursionConfigResponse$;
+    exports2.PutFunctionScalingConfig$ = PutFunctionScalingConfig$;
+    exports2.PutFunctionScalingConfigCommand = PutFunctionScalingConfigCommand;
+    exports2.PutFunctionScalingConfigRequest$ = PutFunctionScalingConfigRequest$;
+    exports2.PutFunctionScalingConfigResponse$ = PutFunctionScalingConfigResponse$;
+    exports2.PutProvisionedConcurrencyConfig$ = PutProvisionedConcurrencyConfig$;
+    exports2.PutProvisionedConcurrencyConfigCommand = PutProvisionedConcurrencyConfigCommand;
+    exports2.PutProvisionedConcurrencyConfigRequest$ = PutProvisionedConcurrencyConfigRequest$;
+    exports2.PutProvisionedConcurrencyConfigResponse$ = PutProvisionedConcurrencyConfigResponse$;
+    exports2.PutRuntimeManagementConfig$ = PutRuntimeManagementConfig$;
+    exports2.PutRuntimeManagementConfigCommand = PutRuntimeManagementConfigCommand;
+    exports2.PutRuntimeManagementConfigRequest$ = PutRuntimeManagementConfigRequest$;
+    exports2.PutRuntimeManagementConfigResponse$ = PutRuntimeManagementConfigResponse$;
+    exports2.RecursiveInvocationException = RecursiveInvocationException;
+    exports2.RecursiveInvocationException$ = RecursiveInvocationException$;
+    exports2.RecursiveLoop = RecursiveLoop;
+    exports2.RemoveLayerVersionPermission$ = RemoveLayerVersionPermission$;
+    exports2.RemoveLayerVersionPermissionCommand = RemoveLayerVersionPermissionCommand;
+    exports2.RemoveLayerVersionPermissionRequest$ = RemoveLayerVersionPermissionRequest$;
+    exports2.RemovePermission$ = RemovePermission$;
+    exports2.RemovePermissionCommand = RemovePermissionCommand;
+    exports2.RemovePermissionRequest$ = RemovePermissionRequest$;
+    exports2.RequestTooLargeException = RequestTooLargeException;
+    exports2.RequestTooLargeException$ = RequestTooLargeException$;
+    exports2.ResolvedS3Object$ = ResolvedS3Object$;
+    exports2.ResourceConflictException = ResourceConflictException;
+    exports2.ResourceConflictException$ = ResourceConflictException$;
+    exports2.ResourceInUseException = ResourceInUseException;
+    exports2.ResourceInUseException$ = ResourceInUseException$;
+    exports2.ResourceNotFoundException = ResourceNotFoundException2;
+    exports2.ResourceNotFoundException$ = ResourceNotFoundException$2;
+    exports2.ResourceNotReadyException = ResourceNotReadyException;
+    exports2.ResourceNotReadyException$ = ResourceNotReadyException$;
+    exports2.ResponseStreamingInvocationType = ResponseStreamingInvocationType;
+    exports2.RetryDetails$ = RetryDetails$;
+    exports2.Runtime = Runtime;
+    exports2.RuntimeVersionConfig$ = RuntimeVersionConfig$;
+    exports2.RuntimeVersionError$ = RuntimeVersionError$;
+    exports2.S3FilesMountConnectivityException = S3FilesMountConnectivityException;
+    exports2.S3FilesMountConnectivityException$ = S3FilesMountConnectivityException$;
+    exports2.S3FilesMountFailureException = S3FilesMountFailureException;
+    exports2.S3FilesMountFailureException$ = S3FilesMountFailureException$;
+    exports2.S3FilesMountTimeoutException = S3FilesMountTimeoutException;
+    exports2.S3FilesMountTimeoutException$ = S3FilesMountTimeoutException$;
+    exports2.S3ObjectStorageMode = S3ObjectStorageMode;
+    exports2.ScalingConfig$ = ScalingConfig$;
+    exports2.SchemaRegistryEventRecordFormat = SchemaRegistryEventRecordFormat;
+    exports2.SelfManagedEventSource$ = SelfManagedEventSource$;
+    exports2.SelfManagedKafkaEventSourceConfig$ = SelfManagedKafkaEventSourceConfig$;
+    exports2.SendDurableExecutionCallbackFailure$ = SendDurableExecutionCallbackFailure$;
+    exports2.SendDurableExecutionCallbackFailureCommand = SendDurableExecutionCallbackFailureCommand;
+    exports2.SendDurableExecutionCallbackFailureRequest$ = SendDurableExecutionCallbackFailureRequest$;
+    exports2.SendDurableExecutionCallbackFailureResponse$ = SendDurableExecutionCallbackFailureResponse$;
+    exports2.SendDurableExecutionCallbackHeartbeat$ = SendDurableExecutionCallbackHeartbeat$;
+    exports2.SendDurableExecutionCallbackHeartbeatCommand = SendDurableExecutionCallbackHeartbeatCommand;
+    exports2.SendDurableExecutionCallbackHeartbeatRequest$ = SendDurableExecutionCallbackHeartbeatRequest$;
+    exports2.SendDurableExecutionCallbackHeartbeatResponse$ = SendDurableExecutionCallbackHeartbeatResponse$;
+    exports2.SendDurableExecutionCallbackSuccess$ = SendDurableExecutionCallbackSuccess$;
+    exports2.SendDurableExecutionCallbackSuccessCommand = SendDurableExecutionCallbackSuccessCommand;
+    exports2.SendDurableExecutionCallbackSuccessRequest$ = SendDurableExecutionCallbackSuccessRequest$;
+    exports2.SendDurableExecutionCallbackSuccessResponse$ = SendDurableExecutionCallbackSuccessResponse$;
+    exports2.SerializedRequestEntityTooLargeException = SerializedRequestEntityTooLargeException;
+    exports2.SerializedRequestEntityTooLargeException$ = SerializedRequestEntityTooLargeException$;
+    exports2.ServiceException = ServiceException2;
+    exports2.ServiceException$ = ServiceException$;
+    exports2.ServiceQuotaExceededException = ServiceQuotaExceededException;
+    exports2.ServiceQuotaExceededException$ = ServiceQuotaExceededException$;
+    exports2.SnapStart$ = SnapStart$;
+    exports2.SnapStartApplyOn = SnapStartApplyOn;
+    exports2.SnapStartException = SnapStartException;
+    exports2.SnapStartException$ = SnapStartException$;
+    exports2.SnapStartNotReadyException = SnapStartNotReadyException;
+    exports2.SnapStartNotReadyException$ = SnapStartNotReadyException$;
+    exports2.SnapStartOptimizationStatus = SnapStartOptimizationStatus;
+    exports2.SnapStartRegenerationFailureException = SnapStartRegenerationFailureException;
+    exports2.SnapStartRegenerationFailureException$ = SnapStartRegenerationFailureException$;
+    exports2.SnapStartResponse$ = SnapStartResponse$;
+    exports2.SnapStartTimeoutException = SnapStartTimeoutException;
+    exports2.SnapStartTimeoutException$ = SnapStartTimeoutException$;
+    exports2.SourceAccessConfiguration$ = SourceAccessConfiguration$;
+    exports2.SourceAccessType = SourceAccessType;
+    exports2.State = State;
+    exports2.StateReasonCode = StateReasonCode;
+    exports2.StepDetails$ = StepDetails$;
+    exports2.StepFailedDetails$ = StepFailedDetails$;
+    exports2.StepOptions$ = StepOptions$;
+    exports2.StepStartedDetails$ = StepStartedDetails$;
+    exports2.StepSucceededDetails$ = StepSucceededDetails$;
+    exports2.StopDurableExecution$ = StopDurableExecution$;
+    exports2.StopDurableExecutionCommand = StopDurableExecutionCommand;
+    exports2.StopDurableExecutionRequest$ = StopDurableExecutionRequest$;
+    exports2.StopDurableExecutionResponse$ = StopDurableExecutionResponse$;
+    exports2.SubnetIPAddressLimitReachedException = SubnetIPAddressLimitReachedException;
+    exports2.SubnetIPAddressLimitReachedException$ = SubnetIPAddressLimitReachedException$;
+    exports2.SystemLogLevel = SystemLogLevel;
+    exports2.TagResource$ = TagResource$;
+    exports2.TagResourceCommand = TagResourceCommand;
+    exports2.TagResourceRequest$ = TagResourceRequest$;
+    exports2.TagsError$ = TagsError$;
+    exports2.TargetTrackingScalingPolicy$ = TargetTrackingScalingPolicy$;
+    exports2.TenancyConfig$ = TenancyConfig$;
+    exports2.TenantIsolationMode = TenantIsolationMode;
+    exports2.ThrottleReason = ThrottleReason;
+    exports2.TooManyRequestsException = TooManyRequestsException2;
+    exports2.TooManyRequestsException$ = TooManyRequestsException$2;
+    exports2.TraceHeader$ = TraceHeader$;
+    exports2.TracingConfig$ = TracingConfig$;
+    exports2.TracingConfigResponse$ = TracingConfigResponse$;
+    exports2.TracingMode = TracingMode;
+    exports2.UnsupportedMediaTypeException = UnsupportedMediaTypeException;
+    exports2.UnsupportedMediaTypeException$ = UnsupportedMediaTypeException$;
+    exports2.UntagResource$ = UntagResource$;
+    exports2.UntagResourceCommand = UntagResourceCommand;
+    exports2.UntagResourceRequest$ = UntagResourceRequest$;
+    exports2.UpdateAlias$ = UpdateAlias$;
+    exports2.UpdateAliasCommand = UpdateAliasCommand;
+    exports2.UpdateAliasRequest$ = UpdateAliasRequest$;
+    exports2.UpdateCapacityProvider$ = UpdateCapacityProvider$;
+    exports2.UpdateCapacityProviderCommand = UpdateCapacityProviderCommand;
+    exports2.UpdateCapacityProviderRequest$ = UpdateCapacityProviderRequest$;
+    exports2.UpdateCapacityProviderResponse$ = UpdateCapacityProviderResponse$;
+    exports2.UpdateCodeSigningConfig$ = UpdateCodeSigningConfig$;
+    exports2.UpdateCodeSigningConfigCommand = UpdateCodeSigningConfigCommand;
+    exports2.UpdateCodeSigningConfigRequest$ = UpdateCodeSigningConfigRequest$;
+    exports2.UpdateCodeSigningConfigResponse$ = UpdateCodeSigningConfigResponse$;
+    exports2.UpdateEventSourceMapping$ = UpdateEventSourceMapping$;
+    exports2.UpdateEventSourceMappingCommand = UpdateEventSourceMappingCommand;
+    exports2.UpdateEventSourceMappingRequest$ = UpdateEventSourceMappingRequest$;
+    exports2.UpdateFunctionCode$ = UpdateFunctionCode$;
+    exports2.UpdateFunctionCodeCommand = UpdateFunctionCodeCommand;
+    exports2.UpdateFunctionCodeRequest$ = UpdateFunctionCodeRequest$;
+    exports2.UpdateFunctionConfiguration$ = UpdateFunctionConfiguration$;
+    exports2.UpdateFunctionConfigurationCommand = UpdateFunctionConfigurationCommand;
+    exports2.UpdateFunctionConfigurationRequest$ = UpdateFunctionConfigurationRequest$;
+    exports2.UpdateFunctionEventInvokeConfig$ = UpdateFunctionEventInvokeConfig$;
+    exports2.UpdateFunctionEventInvokeConfigCommand = UpdateFunctionEventInvokeConfigCommand;
+    exports2.UpdateFunctionEventInvokeConfigRequest$ = UpdateFunctionEventInvokeConfigRequest$;
+    exports2.UpdateFunctionUrlConfig$ = UpdateFunctionUrlConfig$;
+    exports2.UpdateFunctionUrlConfigCommand = UpdateFunctionUrlConfigCommand;
+    exports2.UpdateFunctionUrlConfigRequest$ = UpdateFunctionUrlConfigRequest$;
+    exports2.UpdateFunctionUrlConfigResponse$ = UpdateFunctionUrlConfigResponse$;
+    exports2.UpdateRuntimeOn = UpdateRuntimeOn;
+    exports2.VpcConfig$ = VpcConfig$;
+    exports2.VpcConfigResponse$ = VpcConfigResponse$;
+    exports2.WaitCancelledDetails$ = WaitCancelledDetails$;
+    exports2.WaitDetails$ = WaitDetails$;
+    exports2.WaitOptions$ = WaitOptions$;
+    exports2.WaitStartedDetails$ = WaitStartedDetails$;
+    exports2.WaitSucceededDetails$ = WaitSucceededDetails$;
+    exports2.errorTypeRegistries = errorTypeRegistries5;
+    exports2.paginateGetDurableExecutionHistory = paginateGetDurableExecutionHistory;
+    exports2.paginateGetDurableExecutionState = paginateGetDurableExecutionState;
+    exports2.paginateListAliases = paginateListAliases;
+    exports2.paginateListCapacityProviders = paginateListCapacityProviders;
+    exports2.paginateListCodeSigningConfigs = paginateListCodeSigningConfigs;
+    exports2.paginateListDurableExecutionsByFunction = paginateListDurableExecutionsByFunction;
+    exports2.paginateListEventSourceMappings = paginateListEventSourceMappings;
+    exports2.paginateListFunctionEventInvokeConfigs = paginateListFunctionEventInvokeConfigs;
+    exports2.paginateListFunctionUrlConfigs = paginateListFunctionUrlConfigs;
+    exports2.paginateListFunctionVersionsByCapacityProvider = paginateListFunctionVersionsByCapacityProvider;
+    exports2.paginateListFunctions = paginateListFunctions;
+    exports2.paginateListFunctionsByCodeSigningConfig = paginateListFunctionsByCodeSigningConfig;
+    exports2.paginateListLayerVersions = paginateListLayerVersions;
+    exports2.paginateListLayers = paginateListLayers;
+    exports2.paginateListProvisionedConcurrencyConfigs = paginateListProvisionedConcurrencyConfigs;
+    exports2.paginateListVersionsByFunction = paginateListVersionsByFunction;
+    exports2.waitForFunctionActive = waitForFunctionActive;
+    exports2.waitForFunctionActiveV2 = waitForFunctionActiveV2;
+    exports2.waitForFunctionExists = waitForFunctionExists;
+    exports2.waitForFunctionUpdated = waitForFunctionUpdated;
+    exports2.waitForFunctionUpdatedV2 = waitForFunctionUpdatedV2;
+    exports2.waitForPublishedVersionActive = waitForPublishedVersionActive;
+    exports2.waitUntilFunctionActive = waitUntilFunctionActive;
+    exports2.waitUntilFunctionActiveV2 = waitUntilFunctionActiveV2;
+    exports2.waitUntilFunctionExists = waitUntilFunctionExists;
+    exports2.waitUntilFunctionUpdated = waitUntilFunctionUpdated;
+    exports2.waitUntilFunctionUpdatedV2 = waitUntilFunctionUpdatedV2;
+    exports2.waitUntilPublishedVersionActive = waitUntilPublishedVersionActive;
+  }
+});
+
 // services/game-api/handlers/join-room.ts
 var join_room_exports = {};
 __export(join_room_exports, {
@@ -34930,21 +42189,51 @@ function serviceWithRooms() {
   ));
 }
 
+// services/game-api/handlers/room-broadcaster.ts
+var import_client_lambda = __toESM(require_dist_cjs22());
+var lambdaClient = new import_client_lambda.LambdaClient({});
+async function invokeRoomBroadcaster(roomId, room) {
+  const functionName = process.env.BROADCAST_FUNCTION_NAME;
+  if (!functionName) {
+    throw new Error("BROADCAST_FUNCTION_NAME is required");
+  }
+  await lambdaClient.send(new import_client_lambda.InvokeCommand({
+    FunctionName: functionName,
+    InvocationType: "Event",
+    Payload: Buffer.from(JSON.stringify({
+      roomId,
+      room
+    }))
+  }));
+}
+var noBroadcast = async () => {
+};
+
 // services/game-api/handlers/join-room.ts
-function joinRoomHandler(service) {
+function joinRoomHandler(service, broadcastRoomUpdate = noBroadcast) {
   return async (event) => {
     try {
-      return json(200, await service.joinRoom(
+      const roomId = roomIdParameter(event);
+      const room = await service.joinRoom(
         bearerToken(event),
-        roomIdParameter(event),
+        roomId,
         requiredDisplayName(parseJsonBody(event))
-      ));
+      );
+      try {
+        await broadcastRoomUpdate(roomId, room);
+      } catch (error2) {
+        console.error("Failed to broadcast room update", error2);
+      }
+      return json(200, room);
     } catch (error2) {
       return handleError(error2);
     }
   };
 }
-var handler = async (event) => joinRoomHandler(serviceWithRooms())(event);
+var handler = async (event) => joinRoomHandler(
+  serviceWithRooms(),
+  invokeRoomBroadcaster
+)(event);
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
   handler,

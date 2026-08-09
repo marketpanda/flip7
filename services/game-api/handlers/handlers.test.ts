@@ -89,7 +89,13 @@ describe("game API handlers", () => {
     expect(created.statusCode).toBe(201)
     expect(parse<RoomCodeResponse>(created).roomId).toBe("AB12CD")
 
-    const joined = await joinRoomHandler(service)(authorized(secondSession.token, {
+    const broadcasts: Array<{ roomId: string; version: number }> = []
+    const joined = await joinRoomHandler(service, async (roomId, room) => {
+      broadcasts.push({
+        roomId,
+        version: (room as RoomResponse).version,
+      })
+    })(authorized(secondSession.token, {
       pathParameters: { roomId: "ab12cd" },
       body: JSON.stringify({ displayName: "Bob" }),
     }))
@@ -98,6 +104,7 @@ describe("game API handlers", () => {
     expect(joinedRoom.version).toBe(2)
     expect(joinedRoom.players.map((player) => player.displayName))
       .toEqual(["Alice", "Bob"])
+    expect(broadcasts).toEqual([{ roomId: "AB12CD", version: 2 }])
 
     const fetched = await getRoomHandler(service)(authorized(firstSession.token, {
       pathParameters: { roomId: "AB12CD" },

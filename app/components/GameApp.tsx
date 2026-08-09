@@ -343,7 +343,7 @@ export default function GameApp() {
   const refresh = useCallback(async () => {
     if (!token || !roomRef.current) return
     const latest = await getRoom(token, roomRef.current.roomId)
-    setRoom(latest)
+    setRoom((current) => !current || latest.version > current.version ? latest : current)
   }, [token])
 
   const activeRoomId = room?.roomId
@@ -389,6 +389,35 @@ export default function GameApp() {
     }
     void connect()
     return () => { disposed = true; if (retry) window.clearTimeout(retry); socket?.close() }
+  }, [activeRoomId, refresh, token])
+
+  useEffect(() => {
+    if (!token || !activeRoomId) return
+
+    let refreshing = false
+    const catchUp = async () => {
+      if (refreshing || document.visibilityState === "hidden") return
+      refreshing = true
+      try {
+        await refresh()
+      } catch {
+        // WebSocket reconnects and command errors surface connection problems.
+        // Polling is only a fallback, so a failed poll stays unobtrusive.
+      } finally {
+        refreshing = false
+      }
+    }
+
+    const timer = window.setInterval(() => { void catchUp() }, 3000)
+    const onVisibilityChange = () => { void catchUp() }
+    window.addEventListener("focus", onVisibilityChange)
+    document.addEventListener("visibilitychange", onVisibilityChange)
+
+    return () => {
+      window.clearInterval(timer)
+      window.removeEventListener("focus", onVisibilityChange)
+      document.removeEventListener("visibilitychange", onVisibilityChange)
+    }
   }, [activeRoomId, refresh, token])
 
   async function create(displayName: string) {

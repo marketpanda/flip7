@@ -1,7 +1,3 @@
-import {
-  InvokeCommand,
-  LambdaClient,
-} from "@aws-sdk/client-lambda"
 import type { GameService } from "../game-service"
 import {
   bearerToken,
@@ -12,35 +8,11 @@ import {
   type HttpEvent,
 } from "../shared/http"
 import { serviceWithRooms } from "./dependencies"
-
-type RoomBroadcaster = (
-  roomId: string,
-  room: unknown,
-) => Promise<void>
-
-const lambdaClient = new LambdaClient({})
-
-async function invokeRoomBroadcaster(
-  roomId: string,
-  room: unknown,
-): Promise<void> {
-  const functionName = process.env.BROADCAST_FUNCTION_NAME
-
-  if (!functionName) {
-    throw new Error("BROADCAST_FUNCTION_NAME is required")
-  }
-
-  await lambdaClient.send(new InvokeCommand({
-    FunctionName: functionName,
-    InvocationType: "Event",
-    Payload: Buffer.from(JSON.stringify({
-      roomId,
-      room,
-    })),
-  }))
-}
-
-const noBroadcast: RoomBroadcaster = async () => {}
+import {
+  invokeRoomBroadcaster,
+  noBroadcast,
+  type RoomBroadcaster,
+} from "./room-broadcaster"
 
 export function submitCommandHandler(
   service: GameService,
